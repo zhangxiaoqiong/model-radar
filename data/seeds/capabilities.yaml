@@ -1,0 +1,117 @@
+# LLM Observatory — capability taxonomy seed (spec §2.4)
+# level 1 = top category, level 2 = sub-capability
+
+- slug: reasoning
+  name: Reasoning
+  level: 1
+  sort_order: 10
+
+- slug: mathematics
+  name: Mathematics
+  level: 1
+  sort_order: 20
+
+- slug: coding
+  name: Coding
+  level: 1
+  sort_order: 30
+- slug: coding-code-generation
+  name: Code Generation
+  parent: coding
+  level: 2
+  sort_order: 31
+- slug: coding-debugging
+  name: Debugging
+  parent: coding
+  level: 2
+  sort_order: 32
+- slug: coding-repo-level
+  name: Repo-level Coding
+  parent: coding
+  level: 2
+  sort_order: 33
+- slug: coding-agentic
+  name: Agentic Coding
+  parent: coding
+  level: 2
+  sort_order: 34
+
+- slug: agent
+  name: Agent
+  level: 1
+  sort_order: 40
+- slug: agent-tool-use
+  name: Tool Use
+  parent: agent
+  level: 2
+  sort_order: 41
+- slug: agent-planning
+  name: Planning
+  parent: agent
+  level: 2
+  sort_order: 42
+- slug: agent-multi-step
+  name: Multi-step Task
+  parent: agent
+  level: 2
+  sort_order: 43
+
+- slug: long-context
+  name: Long Context
+  level: 1
+  sort_order: 50
+
+- slug: multimodal
+  name: Multimodal
+  level: 1
+  sort_order: 60
+- slug: multimodal-vision
+  name: Vision
+  parent: multimodal
+  level: 2
+  sort_order: 61
+- slug: multimodal-document
+  name: Document Understanding
+  parent: multimodal
+  level: 2
+  sort_order: 62
+
+- slug: language
+  name: Language
+  level: 1
+  sort_order: 70
+- slug: language-chinese
+  name: Chinese
+  parent: language
+  level: 2
+  sort_order: 71
+- slug: language-english
+  name: English
+  parent: language
+  level: 2
+  sort_order: 72
+- slug: language-multilingual
+  name: Multilingual
+  parent: language
+  level: 2
+  sort_order: 73
+
+- slug: efficiency
+  name: Efficiency
+  level: 1
+  sort_order: 80
+- slug: efficiency-cost
+  name: Cost
+  parent: efficiency
+  level: 2
+  sort_order: 81
+- slug: efficiency-latency
+  name: Latency
+  parent: efficiency
+  level: 2
+  sort_order: 82
+- slug: efficiency-throughput
+  name: Throughput
+  parent: efficiency
+  level: 2
+  sort_order: 83
