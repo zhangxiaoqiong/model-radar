@@ -2,29 +2,29 @@
 
 ## 大模型跟踪、测评与对比系统
 
-版本：v0.2（Architecture Draft）
-上一版：v0.1（Concept Design）
+版本：v0.3（Implementation Ready Draft）
+上一版：v0.2（Architecture Draft）
 产品定位：个人 AI 技术认知与模型情报基础设施
 核心目标：持续跟踪主流 LLM，聚合可信测评，形成统一能力视图，支持模型横向与纵向对比，并自动发现重要变化。
 
 ---
 
-## v0.2 变更记录
+## v0.3 变更记录
 
-相对 v0.1 的关键修改：
+相对 v0.2 的关键修改：
 
-1. 数据库由 PostgreSQL 改为 MySQL（目标实例 5.7.36，设计保持 8.0 兼容）
-2. 正式加入 `model_endpoint`，确立五层实体层级 Provider → Family → Release → Variant → Endpoint
-3. `model_pricing` / `model_performance` 改为 Endpoint 优先挂载
-4. Evaluation 拆分为 `evaluation_run` + `evaluation`（result），引入幂等 fingerprint
-5. 新增 `entity_resolution_queue`、`generated_insight`、`pipeline_run` / `pipeline_stage_run`、`field_observation` 表定义
-6. 定时任务由固定时间改为 DAG 编排，失败阻断下游
-7. 归一化改为 V1 Min-Max + 样本数阈值，benchmark 增加 `score_direction` / `normalization_method`
-8. Artificial Analysis 改为 Free / Pro / Commercial 能力降级设计
-9. 新增 Seed / Tracking Policy，外部同步不自动创建模型
-10. 前后端契约改为 OpenAPI codegen，修正 Python / TS 无法共享 package 的问题
-11. `model_event` 增加 change detection 溯源字段
-12. 新增 Admin 模块（Resolution Queue、Pipeline 状态、Source 同步）
+1. 修复 Evaluation 唯一 fingerprint 与“分数变化保留历史”的冲突，拆分身份键与观察版本键
+2. 原始 Evaluation 与归一化结果解耦，新增 `normalization_run`、`normalized_evaluation`、`capability_score_snapshot`
+3. 明确 Compare 的比较单元为 Release + Variant + optional Endpoint，并定义默认选择策略
+4. Evaluation 补充 Endpoint、数据集 revision、seed、decoding config、scorer version 等可复现字段
+5. Benchmark 增加结构化 `benchmark_metric`，避免多指标与自由文本混用
+6. 新增 `evidence_link`，Evidence 可关联 Evaluation、价格、字段观察及 Event
+7. `model_event` 增加 benchmark / evaluation 关联，完善非模型事件溯源
+8. Raw Snapshot 改为元数据入库、载荷外置保存，增加脱敏、许可与保留策略
+9. Admin 增加认证、RBAC、审计和并发控制要求
+10. Pipeline 增加单实例调度、数据库租约、重试、超时和崩溃恢复约束
+11. 数据库配置改为环境变量示例，统一所有时间为 UTC
+12. V1 拆分为 V1a–V1d，并增加数据质量、时效性与可靠性成功指标
 
 ---
 
@@ -58,6 +58,33 @@ LLM Observatory 不是一个单纯的模型排行榜。
     ↓
 变化追踪
 ```
+
+## 1.1 目标用户与核心场景
+
+V1 首要用户是需要持续进行模型选型与技术跟踪的个人开发者、AI 工程师和技术负责人。
+
+核心场景按优先级排序：
+
+1. 在 10 分钟内完成候选模型的能力、价格、上下文和证据对比。
+2. 快速确认某个分数、价格或规格来自哪里、何时采集、是否仍然有效。
+3. 每日查看值得关注的模型发布、价格变化和评测变化。
+4. 对少量关键模型运行可复现的内部评测。
+
+## 1.2 V1 成功指标
+
+除功能验收外，上线后按以下指标判断产品是否有效：
+
+```text
+核心来源每日同步成功率           >= 95%
+关键事实具备 source + snapshot   >= 99%
+已展示 Evaluation 可复现字段完整率 >= 95%
+人工确认后的 Alias 二次命中率     >= 99%
+错误实体映射率                   < 1%
+数据变更从采集到展示的 P95 延迟    < 24 小时
+核心 Compare 查询 P95            < 1 秒（不含首次冷启动）
+```
+
+产品价值验证：至少由 3 名目标用户完成真实模型选型任务，并记录完成时间、证据查看率和主要阻塞点。
 
 ---
 
@@ -242,7 +269,25 @@ MMMU
 
 ### 2.5 Model Compare
 
-用户选择 2–5 个模型进行比较。
+用户选择 2–5 个比较项进行比较。
+
+比较项不是模糊的“Model”，而是：
+
+```text
+Comparison Item = Model Release + Model Variant + optional Model Endpoint
+```
+
+默认规则：
+
+```text
+Specs       → Release + Variant
+Evaluation  → Variant；有 Endpoint 的内部评测必须显示 Endpoint
+Capability  → Variant + 指定 normalization run
+Price       → Endpoint；默认优先 official_api，不存在时要求用户选择
+Performance → Endpoint；禁止把不同渠道测速静默合并
+```
+
+一个 Release 存在多个 Variant 时，必须由 seed 配置 `default_variant_id` 或让用户选择；不得按名称猜测。
 
 比较四类内容：
 
@@ -475,6 +520,25 @@ Promptfoo
 DeepEval
 ```
 
+## 4.2 Source 接入门槛
+
+每个 Adapter 开发前必须填写 Source Contract：
+
+```text
+获取方式          API / file / official page
+认证方式          key tier 与权限范围
+限流与重试        headers、退避、每日预算
+字段覆盖          model / benchmark / price / performance
+更新频率          来源更新频率与本系统同步频率
+稳定身份          external IDs 是否稳定
+许可              缓存、内部使用、公开展示、再分发限制
+保留策略          full payload / redacted / metadata only
+降级行为          来源不可用或字段缺失时如何展示
+Owner             维护人及失效检查日期
+```
+
+没有明确许可或稳定获取方式的来源只能进入实验状态，不得作为 V1a 发布阻塞项，也不得默认公开再分发其原始载荷。
+
 ---
 
 # 5. 核心数据模型
@@ -485,8 +549,8 @@ DeepEval
 
 ```text
 MySQL 5.7.36
-Host: 10.206.20.94:3306
-Database: model_radar
+Host: ${DB_HOST}:${DB_PORT}
+Database: ${DB_NAME}
 ```
 
 连接信息**只放 `.env`**，禁止硬编码进代码或文档仓库。
@@ -503,9 +567,11 @@ Database: model_radar
 6. 不使用函数索引 / 表达式索引 → fingerprint 等由应用层计算后存为普通列
 7. 不使用 8.0 专属特性（CTE、窗口函数、降序索引等不在 SQL 层依赖；
    应用层代码可用 Python 实现）
-8. 时间: DATETIME，由应用层写入
+8. 时间: DATETIME，由应用层以 UTC 写入；API 使用 ISO 8601 UTC（`Z`）输出
 9. 5.7 已 EOL：设计保持 8.0 兼容，后续可平滑升级实例
 10. 驱动: PyMySQL（SQLAlchemy URL: mysql+pymysql://）
+11. 所有外键列显式建索引；业务唯一键由迁移脚本创建并通过并发测试验证
+12. UUIDv7 由固定依赖库生成，不依赖 Python 3.12 标准库提供
 ```
 
 ---
@@ -562,6 +628,8 @@ model_release
 id CHAR(36) PK
 
 family_id CHAR(36) FK
+default_variant_id CHAR(36) NULL FK
+-- Variant 创建后回填；应用层保证属于当前 Release
 
 canonical_name VARCHAR(128)
 slug VARCHAR(64) UNIQUE
@@ -578,6 +646,11 @@ license VARCHAR(128) NULL
 official_url VARCHAR(512) NULL
 model_card_url VARCHAR(512) NULL
 technical_report_url VARCHAR(512) NULL
+
+source_id CHAR(36) NULL FK
+source_snapshot_id CHAR(36) NULL FK
+observed_at DATETIME NULL
+confidence VARCHAR(16)
 
 status VARCHAR(32)
 -- active / preview / deprecated / retired
@@ -617,6 +690,11 @@ supports_video BOOLEAN
 supports_reasoning BOOLEAN
 supports_tool_calling BOOLEAN
 supports_structured_output BOOLEAN
+
+source_id CHAR(36) NULL FK
+source_snapshot_id CHAR(36) NULL FK
+observed_at DATETIME NULL
+confidence VARCHAR(16)
 
 created_at DATETIME
 updated_at DATETIME
@@ -718,16 +796,12 @@ name VARCHAR(128)
 category VARCHAR(64)
 description TEXT
 
-metric_name VARCHAR(64)
-
-score_direction VARCHAR(16)
--- higher_better / lower_better
-
-normalization_method VARCHAR(16)
--- minmax / percentile / none / custom
--- 默认 minmax，个别 benchmark 可覆盖
-
 official_url VARCHAR(512)
+
+source_id CHAR(36) NULL FK
+source_snapshot_id CHAR(36) NULL FK
+observed_at DATETIME NULL
+confidence VARCHAR(16)
 
 dataset_public BOOLEAN
 dynamic BOOLEAN
@@ -739,7 +813,7 @@ created_at DATETIME
 updated_at DATETIME
 ```
 
-Elo / rating 类 benchmark（如 Arena）不适合 min-max 解释，应设 `normalization_method = none` 或 `custom`。
+分数方向与归一化方法属于具体 Metric，不放在 Benchmark 顶层。
 
 ---
 
@@ -760,10 +834,43 @@ dataset_size INT NULL
 
 notes TEXT NULL
 
+source_id CHAR(36) NULL FK
+source_snapshot_id CHAR(36) NULL FK
+observed_at DATETIME NULL
+confidence VARCHAR(16)
+
 created_at DATETIME
 
 UNIQUE(benchmark_id, version)
 ```
+
+一个 Benchmark Version 可以有多个可比较指标，禁止仅靠自由文本区分 split 或 metric：
+
+```sql
+benchmark_metric
+----------------
+id CHAR(36) PK
+
+benchmark_version_id CHAR(36) FK
+
+slug VARCHAR(64)
+name VARCHAR(128)
+dataset_split VARCHAR(64) NULL
+
+unit VARCHAR(32)
+-- percent / ratio / elo / milliseconds / ...
+
+score_direction VARCHAR(16)
+-- higher_better / lower_better
+normalization_method VARCHAR(16)
+-- minmax / percentile / none / custom
+
+created_at DATETIME
+
+UNIQUE(benchmark_version_id, slug, dataset_split)
+```
+
+正式 Evaluation 必须关联 `benchmark_metric_id`。Elo / rating 类 Metric（如 Arena rating）不适合 min-max 解释，应设 `normalization_method = none` 或 `custom`。
 
 ---
 
@@ -815,9 +922,9 @@ weight = 1.0
 
 ---
 
-# 8. Evaluation 数据模型（v0.2 重构）
+# 8. Evaluation 数据模型（v0.3）
 
-这是系统最核心的部分。v0.2 拆分为 Run / Result 两层：
+这是系统最核心的部分。保持 Run / Result 两层，并在 v0.3 将 Result 明确为不可变 observation：
 
 ```text
 evaluation_run    一次执行
@@ -839,17 +946,24 @@ engine VARCHAR(32) NULL
 -- promptfoo / lm_eval / external_aggregate
 
 source_id CHAR(36) NULL FK
-snapshot_id CHAR(36) NULL FK
+source_snapshot_id CHAR(36) NULL FK
 -- external run 必须关联 source_snapshot，保证可追溯
 
 status VARCHAR(32)
--- running / success / failed / partial
+-- pending / running / success / failed / partial / cancelled
+
+worker_id VARCHAR(128) NULL
+lease_expires_at DATETIME NULL
+heartbeat_at DATETIME NULL
+attempt INT DEFAULT 0
+max_attempts INT DEFAULT 1
 
 config JSON NULL
 -- tasks、参数等
 
 cost_usd DECIMAL(12,4) NULL
 
+queued_at DATETIME NULL
 started_at DATETIME NULL
 finished_at DATETIME NULL
 
@@ -866,18 +980,19 @@ id CHAR(36) PK
 run_id CHAR(36) FK
 
 model_variant_id CHAR(36) FK
+model_endpoint_id CHAR(36) NULL FK
+-- 实际调用渠道明确时必填；纯模型级外部聚合数据可为空
 
 benchmark_id CHAR(36) FK
-benchmark_version_id CHAR(36) NULL FK
+benchmark_version_id CHAR(36) FK
+benchmark_metric_id CHAR(36) FK
 
 score DECIMAL(10,4)
-normalized_score DECIMAL(10,4) NULL
 
-metric VARCHAR(64)
-
-evaluation_date DATE NULL
+evaluation_date DATETIME NULL
 
 source_id CHAR(36) FK
+source_snapshot_id CHAR(36) NULL FK
 
 evaluator VARCHAR(128) NULL
 
@@ -888,22 +1003,37 @@ sample_size INT NULL
 
 reasoning_setting VARCHAR(64) NULL
 temperature DECIMAL(5,3) NULL
+random_seed BIGINT NULL
+few_shot_count INT NULL
 
 harness VARCHAR(64) NULL
 harness_version VARCHAR(32) NULL
 
 agent_scaffold VARCHAR(64) NULL
+agent_scaffold_version VARCHAR(64) NULL
+
+dataset_revision VARCHAR(128) NULL
+scorer_version VARCHAR(64) NULL
+runtime_image VARCHAR(256) NULL
 
 prompt_config JSON NULL
+decoding_config JSON NULL
 
 cost_usd DECIMAL(12,4) NULL
 
 confidence_lower DECIMAL(10,4) NULL
 confidence_upper DECIMAL(10,4) NULL
+confidence VARCHAR(16)
 
 external_evaluation_id VARCHAR(256) NULL
 
-evaluation_fingerprint CHAR(64) NULL UNIQUE
+evaluation_identity_hash CHAR(64)
+-- 同一 Model × Benchmark × 配置的稳定身份；允许出现多个历史 observation
+
+observation_fingerprint CHAR(64) UNIQUE
+-- 身份 + snapshot/revision + score 的不可变观察版本键
+
+supersedes_evaluation_id CHAR(36) NULL FK
 
 raw_payload JSON NULL
 
@@ -912,33 +1042,50 @@ created_at DATETIME
 
 ## 8.3 幂等规则
 
-每日同步绝不能产生重复 evaluation。两级去重：
+每日同步绝不能产生重复 observation，同时必须保留来源改分历史。
 
-**第一优先**：来源提供稳定 ID 时：
-
-```sql
-UNIQUE(source_id, external_evaluation_id)
-```
-
-**否则**：应用层对以下字段 canonicalize（规范化排序）后 SHA-256：
+应用层先对评测身份字段 canonicalize 后计算 `evaluation_identity_hash`：
 
 ```text
 model_variant_id
+model_endpoint_id
 benchmark_id
 benchmark_version_id
+benchmark_metric_id
 source_id
 evaluator
 harness + harness_version
 reasoning_setting
-agent_scaffold
-prompt_config
+agent_scaffold + agent_scaffold_version
+dataset_revision
+scorer_version
+prompt_config + decoding_config
 ```
 
-生成 `evaluation_fingerprint`，靠 UNIQUE 约束保证幂等。
+随后用以下字段生成唯一的 `observation_fingerprint`：
 
-同步时按 fingerprint 查询：已存在 → 对比分数，分数变化走 Change Detection（更新或新增版本，不盲插）；不存在 → 插入。
+```text
+evaluation_identity_hash
+external_evaluation_id（若来源提供）
+source_snapshot_id 或来源 revision
+score
+confidence interval
+sample_size
+```
 
-注意：同一 fingerprint 分数变化时，不能覆盖旧记录（见第 17 节），新增一条并保留历史。
+同步规则：
+
+```text
+observation_fingerprint 已存在
+→ 跳过，保证重放幂等
+
+identity 相同、observation 不同
+→ 新增 Evaluation
+→ supersedes_evaluation_id 指向上一条 observation
+→ Change Detection 生成分数变化事件
+```
+
+禁止覆盖旧 Evaluation。来源稳定 ID 只是身份材料，不单独设置唯一约束，因为同一外部记录可能被来源方修订。
 
 ---
 
@@ -977,6 +1124,28 @@ raw_content MEDIUMTEXT NULL
 
 created_at DATETIME
 ```
+
+Evidence 与事实使用显式关联表，禁止仅在 JSON 中保存不可校验的 ID：
+
+```sql
+evidence_link
+-------------
+id CHAR(36) PK
+evidence_id CHAR(36) FK
+
+target_type VARCHAR(32)
+-- evaluation / pricing / performance / field_observation / model_event / benchmark_version
+
+target_id CHAR(36)
+relation_type VARCHAR(32)
+-- supports / contradicts / explains
+
+created_at DATETIME
+
+UNIQUE(evidence_id, target_type, target_id, relation_type)
+```
+
+应用层必须校验 `target_type + target_id` 对应实体存在；删除目标实体前必须先处理关联。V2 可按规模拆成强外键的多张关联表。
 
 ---
 
@@ -1044,11 +1213,17 @@ effective_from DATETIME NULL
 effective_to DATETIME NULL
 
 source_id CHAR(36) FK
+source_snapshot_id CHAR(36) NULL FK
+observed_at DATETIME
+confidence VARCHAR(16)
+ingestion_run_id CHAR(36) NULL FK
+
+pricing_fingerprint CHAR(64) UNIQUE
 
 created_at DATETIME
 ```
 
-不能直接覆盖旧价格。否则无法做价格时间线。
+不能直接覆盖旧价格。否则无法做价格时间线。应用层必须校验同一 Endpoint、币种与价格类型的有效时间区间不重叠；相同 observation 重放由 `pricing_fingerprint` 去重。
 
 ---
 
@@ -1075,8 +1250,14 @@ prompt_length INT NULL
 measured_at DATETIME
 
 source_id CHAR(36) FK
+source_snapshot_id CHAR(36) NULL FK
+confidence VARCHAR(16)
+ingestion_run_id CHAR(36) NULL FK
+
+performance_fingerprint CHAR(64) UNIQUE
 
 raw_payload JSON NULL
+created_at DATETIME
 ```
 
 ---
@@ -1092,9 +1273,15 @@ id CHAR(36) PK
 
 event_type VARCHAR(32)
 
-model_release_id CHAR(36) NULL
-model_variant_id CHAR(36) NULL
-model_endpoint_id CHAR(36) NULL
+model_release_id CHAR(36) NULL FK
+model_variant_id CHAR(36) NULL FK
+model_endpoint_id CHAR(36) NULL FK
+benchmark_id CHAR(36) NULL FK
+benchmark_version_id CHAR(36) NULL FK
+evaluation_id CHAR(36) NULL FK
+model_pricing_id CHAR(36) NULL FK
+model_performance_id CHAR(36) NULL FK
+field_observation_id CHAR(36) NULL FK
 
 title VARCHAR(256)
 summary TEXT
@@ -1107,17 +1294,19 @@ importance INT
 before_value JSON NULL
 after_value JSON NULL
 
-source_id CHAR(36) NULL
+source_id CHAR(36) NULL FK
 
-change_detection_run_id CHAR(36) NULL
+change_detection_run_id CHAR(36) NULL FK
 -- 溯源：由哪次 pipeline 产生
 
-snapshot_before_id CHAR(36) NULL
-snapshot_after_id CHAR(36) NULL
+snapshot_before_id CHAR(36) NULL FK
+snapshot_after_id CHAR(36) NULL FK
 -- 溯源：对比的两次 snapshot
 
 created_at DATETIME
 ```
+
+每条 Event 至少关联一个业务主体。`benchmark_update` 必须关联 Benchmark，评测改分事件必须关联新 Evaluation；不得创建只有标题而没有结构化主体的 Event。
 
 event_type：
 
@@ -1145,7 +1334,7 @@ External Source
       ↓
 Source Adapter（按 tier 能力降级）
       ↓
-Raw Snapshot（持久化，不可删）
+Raw Snapshot（按 retention / license policy 持久化）
       ↓
 Normalizer
       ↓
@@ -1166,7 +1355,7 @@ Capability Recalculation
 
 不要 API 数据抓回来直接覆盖数据库。
 
-必须保存原始 Snapshot。
+必须保存原始 Snapshot，但不把大体积载荷长期重复存入 MySQL。
 
 ```text
 data/raw/
@@ -1181,7 +1370,9 @@ livebench/
     2026-09-20.json
 ```
 
-同时入库（双保险，数据库为准，文件便于 diff）：
+本地开发可使用 `data/raw/`；生产环境使用对象存储或受控文件存储。`data/raw/` 必须加入 `.gitignore`，原始载荷不得提交 Git。
+
+数据库保存索引与校验信息：
 
 ```sql
 source_snapshot
@@ -1189,15 +1380,25 @@ source_snapshot
 id CHAR(36) PK
 source_id CHAR(36) FK
 snapshot_time DATETIME
-payload JSON
+storage_uri VARCHAR(1024)
+content_encoding VARCHAR(32) NULL
+content_length BIGINT
 checksum CHAR(64)
 -- payload 的 SHA-256，用于快速判断是否变化
 stats JSON NULL
 -- 记录数、解析统计等
+license_policy VARCHAR(32)
+-- retain / metadata_only / no_redistribution
+redaction_status VARCHAR(16)
+retention_until DATETIME NULL
 created_at DATETIME
+
+UNIQUE(source_id, checksum)
 ```
 
-这样以后发现解析错误，可以重新处理。
+小于配置阈值的载荷可选择内联保存到单独的 `source_snapshot_blob` 表，但业务查询不得默认加载 blob。
+
+Adapter 上线前必须记录来源服务条款、缓存许可、再分发限制和必要的字段脱敏规则。这样既能在解析错误后重放，也避免数据库、Git 仓库和备份无限膨胀。
 
 ---
 
@@ -1246,7 +1447,7 @@ id CHAR(36) PK
 source_id CHAR(36) FK
 
 record_type VARCHAR(32)
--- model / benchmark / endpoint
+-- V1 固定为 model_variant；benchmark / endpoint resolution 在 V1b 后单独建模
 
 external_id VARCHAR(256) NULL
 external_name VARCHAR(256)
@@ -1267,6 +1468,8 @@ status VARCHAR(32)
 
 resolution_note VARCHAR(512) NULL
 
+version INT DEFAULT 1
+resolved_by VARCHAR(128) NULL
 resolved_at DATETIME NULL
 
 created_at DATETIME
@@ -1380,7 +1583,7 @@ Model Score = 93
 
 ---
 
-# 19. 数据归一化（v0.2 修改）
+# 19. 数据归一化（v0.3）
 
 不同 Benchmark 的分数不能直接平均。
 
@@ -1394,6 +1597,8 @@ Benchmark-specific normalization
 Capability Aggregation
 ```
 
+归一化和能力分属于可重算的派生数据，不回写不可变的 `evaluation` 表。
+
 ## 19.1 默认方法
 
 ```text
@@ -1402,7 +1607,7 @@ Min-Max within same benchmark version
 
 （v0.1 的 percentile 方案废弃：V1 模型基数小，percentile 只是几个离散台阶，没有解释力。）
 
-按 `benchmark.score_direction` 处理方向；`normalization_method = none / custom` 的 benchmark（如 Elo）不参与默认归一化。
+按 `benchmark_metric.score_direction` 处理方向；`normalization_method = none / custom` 的 Metric（如 Elo）不参与默认归一化。
 
 ## 19.2 样本数阈值
 
@@ -1419,7 +1624,7 @@ n >= 10
 → 正常使用
 ```
 
-n = 同一 benchmark version 下有成绩的 model variant 数量。
+n = 同一 benchmark metric、同一可比 cohort 下有成绩的独立 model release 数量。同一 release 的多个 variant 默认只取产品定义的主 variant，避免重复加权。
 
 ## 19.3 Capability 聚合
 
@@ -1437,6 +1642,48 @@ capability_score = Σ (normalized_score × benchmark_capability_map.weight)
 算法版本
 计算时间
 ```
+
+## 19.4 归一化与能力快照
+
+每次重算创建独立版本：
+
+```sql
+normalization_run
+-----------------
+id CHAR(36) PK
+algorithm VARCHAR(32)
+algorithm_version VARCHAR(32)
+cohort_definition JSON
+as_of_time DATETIME
+status VARCHAR(16)
+created_at DATETIME
+
+normalized_evaluation
+---------------------
+id CHAR(36) PK
+normalization_run_id CHAR(36) FK
+evaluation_id CHAR(36) FK
+normalized_score DECIMAL(10,4)
+sample_count INT
+confidence VARCHAR(16)
+created_at DATETIME
+
+UNIQUE(normalization_run_id, evaluation_id)
+
+capability_score_snapshot
+-------------------------
+id CHAR(36) PK
+normalization_run_id CHAR(36) FK
+model_variant_id CHAR(36) FK
+capability_id CHAR(36) FK
+score DECIMAL(10,4)
+evidence_summary JSON
+calculated_at DATETIME
+
+UNIQUE(normalization_run_id, model_variant_id, capability_id)
+```
+
+页面默认读取最新成功的 `normalization_run`，同时展示 `as_of_time` 和算法版本。历史页面固定读取当时的 run，不能用今天的 cohort 重算后冒充历史变化。
 
 ---
 
@@ -1629,12 +1876,14 @@ Efficiency 区域按 Endpoint 维度展示价格与速度（同一模型不同�
 5 Models
 ```
 
-URL：
+URL 使用稳定 ID 明确 Variant 与可选 Endpoint：
 
 ```text
 /compare?
-models=modelA,modelB,modelC
+items=variantA@endpointA,variantB,variantC@endpointC
 ```
+
+页面顶部始终显示当前比较的 Release、Variant、Endpoint 和数据时间点。缺失 Endpoint 时，Price / Performance 显示“请选择渠道”，不得自动展示跨渠道聚合值。
 
 比较区域：
 
@@ -1762,6 +2011,7 @@ POST /evaluation-runs
 {
   "engine": "lm_eval",
   "model_variant_id": "...",
+  "model_endpoint_id": "...",
   "tasks": [
     "mmlu_pro",
     "gpqa",
@@ -1769,6 +2019,8 @@ POST /evaluation-runs
   ]
 }
 ```
+
+Internal Evaluation 必须指定 Endpoint；服务端校验该 Endpoint 属于所选 Variant。请求还必须固定 dataset revision、seed 与 decoding config，或由版本化 suite 配置补齐。
 
 执行结果自动进入：
 
@@ -1800,7 +2052,7 @@ Alembic
 APScheduler（仅作触发器，编排见第 32 节）
 ```
 
-V1 不需要 Celery。
+V1 不强制使用 Celery，但长任务必须通过数据库任务表交给独立 worker，不能在 API 或 Scheduler 进程内执行。
 
 什么时候需要 Celery：
 
@@ -1920,20 +2172,34 @@ docs/
 
 # 31. 后端 API
 
+公共约定：
+
+```text
+Base Path      /api/v1
+Pagination     cursor + limit，列表默认 50、最大 200
+Time           ISO 8601 UTC
+Error          RFC 9457 Problem Details
+Tracing        每个响应返回 X-Request-ID
+Versioning     破坏性变更升级 Base Path；字段新增保持向后兼容
+Provenance     事实响应包含 source、observed_at、confidence、snapshot_id
+```
+
+以下路径均省略 `/api/v1` 前缀。
+
 ## Model
 
 ```text
-GET /api/models
+GET /models
 
-GET /api/models/{id}
+GET /models/{id}
 
-GET /api/models/{id}/evaluations
+GET /models/{id}/evaluations
 
-GET /api/models/{id}/capabilities
+GET /models/{id}/capabilities
 
-GET /api/models/{id}/events
+GET /models/{id}/events
 
-GET /api/models/{id}/endpoints
+GET /models/{id}/endpoints
 ```
 
 ---
@@ -1941,9 +2207,9 @@ GET /api/models/{id}/endpoints
 ## Compare
 
 ```text
-GET /api/compare/models
+GET /compare/models
 
-?ids=a,b,c
+?items=variantA@endpointA,variantB
 ```
 
 ---
@@ -1951,11 +2217,11 @@ GET /api/compare/models
 ## Benchmark
 
 ```text
-GET /api/benchmarks
+GET /benchmarks
 
-GET /api/benchmarks/{id}
+GET /benchmarks/{id}
 
-GET /api/benchmarks/{id}/results
+GET /benchmarks/{id}/results
 ```
 
 ---
@@ -1963,7 +2229,7 @@ GET /api/benchmarks/{id}/results
 ## Timeline
 
 ```text
-GET /api/events
+GET /events
 ```
 
 筛选：
@@ -1981,13 +2247,13 @@ importance
 ## Sources & Pipeline
 
 ```text
-POST /api/admin/sources/sync
+POST /admin/sources/sync
 
-GET  /api/admin/sources/status
+GET  /admin/sources/status
 
-GET  /api/admin/pipelines
+GET  /admin/pipelines
 
-GET  /api/admin/pipelines/{id}
+GET  /admin/pipelines/{id}
 ```
 
 ---
@@ -1995,22 +2261,53 @@ GET  /api/admin/pipelines/{id}
 ## Admin: Resolution Queue
 
 ```text
-GET  /api/admin/resolution-queue
+GET  /admin/resolution-queue
      ?status=pending
 
-POST /api/admin/resolution-queue/{id}/approve
+POST /admin/resolution-queue/{id}/approve
 
-POST /api/admin/resolution-queue/{id}/reject
+POST /admin/resolution-queue/{id}/reject
 
-POST /api/admin/resolution-queue/{id}/create-model
+POST /admin/resolution-queue/{id}/create-model
 
-POST /api/admin/resolution-queue/{id}/map
+POST /admin/resolution-queue/{id}/map
      body: { "model_variant_id": "..." }
 ```
 
+## 31.1 Admin 安全与审计
+
+所有 `/api/v1/admin/**` 接口必须满足：
+
+```text
+Authentication  API token 或 OIDC session
+Authorization   RBAC：viewer / editor / admin
+Audit           记录 actor、action、target、before、after、request_id、timestamp
+Concurrency     更新携带 version，使用 optimistic locking，冲突返回 409
+Idempotency     同步触发、Approve、Create、Map 支持 Idempotency-Key
+Protection      非浏览器 token 禁止写入前端包；Session 模式启用 CSRF 防护
+```
+
+新增审计表：
+
+```sql
+admin_audit_log
+---------------
+id CHAR(36) PK
+actor_id VARCHAR(128)
+action VARCHAR(64)
+target_type VARCHAR(32)
+target_id CHAR(36) NULL
+before_value JSON NULL
+after_value JSON NULL
+request_id VARCHAR(64)
+created_at DATETIME
+```
+
+生产环境默认关闭匿名 Admin 访问；个人本地部署也必须显式配置 admin token。
+
 ---
 
-# 32. Pipeline 编排（v0.2 重构）
+# 32. Pipeline 编排（v0.3）
 
 v0.1 的固定时间表（01:00 / 01:30 / 02:00 ...）只是产品示意。独立 cron job 互相不知情，上游失败下游照样跑，会产生脏数据。
 
@@ -2049,6 +2346,17 @@ Capability Recalculation
 
 非 critical（如某个非核心 source 同步失败）可标记 partial 继续下游。
 
+运行约束：
+
+```text
+1. Scheduler 作为独立单实例进程运行，不嵌入多 worker FastAPI 进程。
+2. 每次触发先获取数据库 lease；同一 pipeline_type 同一时间只允许一个 active run。
+3. lease 包含 owner_id、acquired_at、expires_at、heartbeat_at，进程崩溃后可恢复。
+4. 每个 stage 定义 timeout、max_attempts、retry_backoff 和是否 critical。
+5. 重启时扫描超时的 running stage：幂等 stage 可重试，其余标记 failed 等待人工处理。
+6. Internal Evaluation 由独立 worker 拉取任务，不占用 API 或 Scheduler 进程。
+```
+
 ## 32.1 pipeline_run
 
 ```sql
@@ -2062,6 +2370,10 @@ pipeline_type VARCHAR(32)
 trigger VARCHAR(16)
 -- schedule / manual
 
+lease_owner VARCHAR(128) NULL
+lease_expires_at DATETIME NULL
+heartbeat_at DATETIME NULL
+
 status VARCHAR(32)
 -- pending / running / success / partial / failed
 
@@ -2069,6 +2381,10 @@ started_at DATETIME NULL
 finished_at DATETIME NULL
 
 error_message TEXT NULL
+
+attempt INT
+max_attempts INT
+timeout_seconds INT NULL
 
 created_at DATETIME
 ```
@@ -2095,11 +2411,19 @@ detail JSON NULL
 
 error_message TEXT NULL
 
+attempt INT
+max_attempts INT
+timeout_seconds INT NULL
+retry_backoff_seconds INT NULL
+critical BOOLEAN
+
 started_at DATETIME NULL
 finished_at DATETIME NULL
 ```
 
 Orchestrator 是 packages/ingestion/pipeline 里的一个顺序状态机，不需要 Airflow / Celery。
+
+V1 可以使用数据库任务表 + 独立 worker，不要求引入 Celery；但“无需 Celery”不等于允许在 Web 请求进程内执行长任务。
 
 ---
 
@@ -2169,11 +2493,21 @@ model_used VARCHAR(64)
 prompt_version VARCHAR(32)
 
 input_evidence_ids JSON
--- 引用了哪些 evidence，可回溯
+-- 仅作生成输入快照，不作为唯一关联关系
 
 content MEDIUMTEXT
 
 generated_at DATETIME
+```
+
+同时写入强关联表：
+
+```sql
+generated_insight_evidence
+--------------------------
+generated_insight_id CHAR(36) FK
+evidence_id CHAR(36) FK
+PRIMARY KEY (generated_insight_id, evidence_id)
 ```
 
 ---
@@ -2189,19 +2523,19 @@ source_type
 confidence
 ```
 
-优先级：
+落库约定：事实表直接或通过其 run 关联以下 provenance 字段：
 
 ```text
-Independent Eval
->
-Official Provider
->
-Reliable Aggregator
->
-Community
+source_id
+source_snapshot_id
+observed_at（UTC）
+confidence
+ingestion_run_id
 ```
 
-但不能简单认为官方规格"不可信"。
+`source_type` 由 `source_id` 关联获得，避免冗余不一致。API 输出统一展开这些字段；缺少必要 provenance 的数据不得进入面向用户的默认视图。
+
+不存在适用于所有字段的全局来源排名。`source.reliability_level` 只表示来源基础可靠度，最终 canonical 选择必须使用字段级 Source Policy：官方来源通常是产品规格与官方价格的权威，独立评测通常是能力分数的优先来源，聚合器主要用于发现和交叉校验。
 
 ## 35.1 字段级 Source Policy
 
@@ -2250,8 +2584,11 @@ field_name VARCHAR(64)
 value VARCHAR(256)
 
 source_id CHAR(36) FK
+source_snapshot_id CHAR(36) NULL FK
 
 observed_at DATETIME
+confidence VARCHAR(16)
+ingestion_run_id CHAR(36) NULL FK
 
 created_at DATETIME
 ```
@@ -2393,6 +2730,17 @@ Instruction Following
 
 # 39. 开发优先级
 
+V1 分阶段交付，每阶段都必须可运行、可回滚、可独立验收：
+
+```text
+V1a  Registry + 单一核心来源 + 原始 Evaluation + 基础 Compare
+V1b  多来源解析 + Resolution Queue + Timeline
+V1c  版本化归一化 + Capability
+V1d  少量关键模型的 Internal Evaluation
+```
+
+V1a 是首个可发布 MVP；V1b–V1d 不阻塞 V1a 上线。每个阶段进入下一阶段前，必须达到第 1.2 节对应的数据质量指标。
+
 ## Sprint 1
 
 数据库 + Registry。
@@ -2428,7 +2776,7 @@ Alembic + MySQL 连接 + .env
 
 ```text
 Artificial Analysis Adapter（tier 感知 + 降级）
-Raw Snapshot（文件 + source_snapshot 表）
+Raw Snapshot（外置载荷 + source_snapshot 元数据表）
 Normalizer
 Entity Resolution + resolution queue
 Pipeline DAG 骨架（pipeline_run / pipeline_stage_run）
@@ -2455,7 +2803,8 @@ Benchmark + Evaluation。
 ```text
 Benchmark Registry（含 score_direction / normalization_method）
 Evaluation Run / Result 拆分
-Fingerprint 幂等
+Identity Hash + Observation Fingerprint 幂等与历史版本
+Benchmark Metric
 External Scores 入库
 ```
 
@@ -2464,6 +2813,7 @@ External Scores 入库
 ```text
 模型详情页能看到专业评测，每条分数可追溯 source + snapshot。
 重复同步不产生重复 evaluation。
+来源改分时新增 observation 且正确关联 supersedes，不覆盖历史。
 ```
 
 ---
@@ -2494,7 +2844,7 @@ Capability。
 Capability Taxonomy
 Benchmark Mapping
 Min-Max 归一化 + 样本数阈值
-Normalized Scores
+Normalization Run + Normalized Evaluation + Capability Score Snapshot
 ```
 
 ---
@@ -2529,34 +2879,52 @@ lm-evaluation-harness
 
 结果写入 evaluation_run + evaluation。
 
+V1d 仅选择 3–5 个关键模型和少量固定任务，先验证可复现性、成本记录和独立 worker 稳定性；不追求大规模并行。
+
 ---
 
 # 40. MVP 验收标准
 
-系统必须能够：
+## 40.1 V1a 发布门槛
 
-1. 查看当前跟踪模型。
-2. 查看模型完整基础信息。
-3. 查看模型不同 Variant 与 Endpoint。
-4. 查看模型 Benchmark。
-5. Benchmark 能追溯来源。
-6. 查看 Benchmark 定义（含分数方向与归一化方法）。
-7. 选择至少 2 个模型比较。
-8. 比较 Benchmark。
-9. 按 Endpoint 比较价格。
-10. 比较 Context。
-11. 比较速度。
-12. 查看统一 Capability（含样本数与置信标记）。
-13. 查看最近模型发布。
-14. 查看价格变化。
-15. 查看 Benchmark 变化，且变化可溯源到 snapshot。
-16. Artificial Analysis 自动同步，按 key tier 降级。
-17. Raw Snapshot 可追溯。
-18. 模型 Alias 不重复生成 Model；未知模型进入人工队列。
-19. Resolution Queue 可 Approve / Reject / Create / Map，Approve 自动生成 alias。
-20. Pipeline 每阶段状态可查，失败阻断下游。
-21. 可以执行自己的 Promptfoo Eval。
-22. Evaluation Run 可以进入数据库且幂等。
+1. 可以查看 20 个种子模型的 Release、Variant 与 Endpoint。
+2. 至少一个核心来源可以自动同步，并按 key tier 静默降级。
+3. Raw Snapshot 可由数据库 metadata 定位并通过 checksum 校验。
+4. 外部 Evaluation 可入库；重复重放不重复，来源改分不覆盖历史。
+5. 每条公开展示的 Evaluation 均可追溯到 source、snapshot、benchmark version 和 metric。
+6. 可以选择至少两个明确的 Variant 进行 Specs 与 Benchmark 比较。
+7. 价格和性能仅按明确 Endpoint 比较，不静默混合渠道。
+8. Admin 接口默认需要认证，关键写操作产生审计记录。
+9. Pipeline stage 状态可查，critical stage 失败阻断下游，崩溃后可识别并恢复 stale run。
+
+## 40.2 V1b 验收
+
+1. 多来源 Alias 不重复生成 canonical Model，未知模型进入人工队列。
+2. Resolution Queue 可 Approve / Reject / Create / Map；操作支持幂等和并发冲突检测。
+3. Approve 后自动生成 Alias，二次同步直接命中。
+4. 可以查看模型发布、价格和 Benchmark 变化，且 Event 关联业务主体与 before/after snapshot。
+
+## 40.3 V1c 验收
+
+1. 可以查看版本化 Capability，展示样本数、置信标记、算法版本和 as-of time。
+2. 同一 normalization run 可重复计算得到相同结果。
+3. 新增模型只创建新的 run，不修改旧 run 的历史分数。
+4. 所有聚合分均可展开到参与的原始 Evaluation。
+
+## 40.4 V1d 验收
+
+1. 可以通过独立 worker 执行 Promptfoo 或 lm-evaluation-harness 任务。
+2. Evaluation Run 记录 Endpoint、数据集 revision、seed、配置、运行环境和成本。
+3. 同一固定配置可复跑，结果差异可解释并保留为不同 observation。
+4. API/Scheduler 重启不丢失任务，也不会重复计费执行已成功任务。
+
+## 40.5 非功能验收
+
+1. 达到第 1.2 节的数据质量和时效性指标。
+2. 所有数据库时间使用 UTC，所有表和连接使用 utf8mb4。
+3. Alembic 可在空库完整升级，并可从上一发布版本回滚。
+4. 核心写入路径具备并发与幂等测试，核心查询具备最小性能基准。
+5. Git 仓库不包含 `.env`、API Key、数据库地址或 Raw Snapshot。
 
 ---
 
@@ -2570,7 +2938,7 @@ lm-evaluation-harness
 * 不要擅自添加微服务。
 * 不要把所有东西塞进一个表。
 * 不要使用 LLM 生成事实数据。
-* 不要删除 Raw Snapshot。
+* 不要绕过 retention / license policy 擅自删除或永久保留 Raw Snapshot。
 * 不要直接覆盖历史价格。
 * 不要直接覆盖历史 evaluation 分数（变化=新增记录）。
 * 不要假定模型名称唯一。
@@ -2607,7 +2975,11 @@ Method
 +
 Version
 +
-Fingerprint
+Identity Hash
++
+Observation Fingerprint
++
+Reproducibility Config
 ```
 
 所有变化：
