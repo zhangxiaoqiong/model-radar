@@ -13,3 +13,5 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - Visual direction: the selected light “Model Atlas” catalog concept.
 - Keep the product concise and efficient; prioritize the model catalog and compare flow.
 - Default all visible data and freshness filters to the latest three months.
+- Keep all four primary sections (Overview, Models, Compare, Benchmarks) visible and functional; each section must have its own stable URL and meaningful content.
+- Show selected models directly below the model filters, with clear 0/1/2+ guidance; never hide the active selection only at the bottom of the viewport.

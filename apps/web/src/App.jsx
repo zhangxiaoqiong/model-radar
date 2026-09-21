@@ -1,8 +1,14 @@
-import { useMemo, useState } from "react";
-import { PiArrowLeft, PiArrowRight, PiCaretDown, PiCheck, PiClockCounterClockwise, PiCrosshair, PiInfo, PiMagnifyingGlass, PiSparkle, PiX } from "react-icons/pi";
+import { useEffect, useMemo, useState } from "react";
+import {
+  PiArrowLeft, PiArrowRight, PiBracketsCurly,
+  PiCaretDown, PiCaretRight, PiChartLineUp, PiCheck,
+  PiClockCounterClockwise, PiCrosshair, PiCurrencyDollar, PiInfo,
+  PiLightning, PiMagnifyingGlass, PiShieldWarning, PiSparkle, PiTrendUp, PiX,
+} from "react-icons/pi";
 import { SiAlibabacloud, SiAnthropic, SiDeepseek, SiGoogle, SiMeta } from "react-icons/si";
 
 const PROVIDER_ICONS = { OpenAI: PiSparkle, Anthropic: SiAnthropic, Google: SiGoogle, Meta: SiMeta, DeepSeek: SiDeepseek, Alibaba: SiAlibabacloud };
+const ROUTES = { overview: "/", models: "/models", compare: "/compare", benchmarks: "/benchmarks" };
 const MODELS = [
   { id:"gpt-5-2", name:"GPT-5.2", provider:"OpenAI", release:"2026-08-15", context:"1M", reasoning:5, vision:4, tools:5, eval:92.4, benchmark:"MMLU-Pro", source:"Artificial Analysis", variants:["standard","reasoning"], endpoint:"OpenAI API", openWeight:false, score:{"SWE-bench":76.3,GPQA:89.2,"LiveBench Coding":81.4} },
   { id:"claude-opus-4-1", name:"Claude Opus 4.1", provider:"Anthropic", release:"2026-08-05", context:"200K", reasoning:5, vision:4, tools:4, eval:90.1, benchmark:"MMLU-Pro", source:"Artificial Analysis", variants:["standard","thinking"], endpoint:"Anthropic API", openWeight:false, score:{"SWE-bench":72.8,GPQA:88.7,"LiveBench Coding":79.6} },
@@ -11,46 +17,82 @@ const MODELS = [
   { id:"deepseek-r2", name:"DeepSeek R2", provider:"DeepSeek", release:"2026-08-21", context:"256K", reasoning:4, vision:2, tools:3, eval:88.9, benchmark:"MMLU-Pro", source:"OpenCompass", variants:["chat","reasoner"], endpoint:"DeepSeek API", openWeight:true, score:{"SWE-bench":70.2,GPQA:87.1,"LiveBench Coding":77.8} },
   { id:"qwen3-max", name:"Qwen3 Max", provider:"Alibaba", release:"2026-08-11", context:"1M", reasoning:4, vision:4, tools:4, eval:89.4, benchmark:"MMLU-Pro", source:"Qwen Eval", variants:["standard","thinking"], endpoint:"Alibaba Cloud", openWeight:false, score:{"SWE-bench":71.6,GPQA:86.9,"LiveBench Coding":78.3} },
 ];
+const UPDATES = [
+  { type:"基准变化", icon:PiChartLineUp, tone:"blue", title:"GPT-5.2 在 SWE-bench Verified 上升 5.8%", detail:"72.1 → 76.3 · 当前三个月最大代码能力变化", date:"09-20", source:"Artificial Analysis" },
+  { type:"规格更新", icon:PiBracketsCurly, tone:"violet", title:"Claude Sonnet 4.5 上下文扩展至 1M", detail:"长文档与代码库任务的可用窗口显著扩大", date:"09-18", source:"Anthropic" },
+  { type:"价格调整", icon:PiCurrencyDollar, tone:"amber", title:"Gemini 2.5 Flash 输入价格下调 20%", detail:"$0.30 → $0.24 / 1M tokens", date:"09-16", source:"Google" },
+  { type:"新模型", icon:PiLightning, tone:"green", title:"DeepSeek R2 进入观察名单", detail:"推理与工具使用评测已开始持续跟踪", date:"09-12", source:"DeepSeek" },
+];
+const BENCHMARKS = [
+  { id:"swe-bench", name:"SWE-bench Verified", category:"代码", capability:"Repo-level Coding", version:"2026.08", metric:"Resolved %", risk:"中", results:6, updated:"09-20", description:"衡量模型在真实 GitHub 仓库中定位、修改并验证软件问题的能力。", method:"500 个经人工验证的软件工程任务，分数越高越好。" },
+  { id:"gpqa", name:"GPQA Diamond", category:"推理", capability:"Scientific Reasoning", version:"Diamond", metric:"Accuracy", risk:"低", results:6, updated:"09-18", description:"面向博士级科学问题的高难度推理评测。", method:"198 道精选题目，采用准确率并记录推理设置。" },
+  { id:"livebench", name:"LiveBench Coding", category:"代码", capability:"Code Generation", version:"2026-09", metric:"Score", risk:"低", results:6, updated:"09-17", description:"按月更新、减少训练污染影响的动态代码评测。", method:"使用当月新题集，保留版本与评测时间。" },
+  { id:"mmlu-pro", name:"MMLU-Pro", category:"推理", capability:"Knowledge & Reasoning", version:"0.3", metric:"Accuracy", risk:"中", results:6, updated:"09-15", description:"覆盖多学科知识与复杂推理的选择题评测。", method:"十选一题型，按统一 prompt 与温度设置比较。" },
+  { id:"mmmu", name:"MMMU", category:"多模态", capability:"Vision Reasoning", version:"1.1", metric:"Accuracy", risk:"中", results:4, updated:"09-09", description:"面向大学学科图像、图表与文档理解的多模态评测。", method:"图文混合输入，结果明确关联支持视觉的 Variant。" },
+];
 
-function Rating({ value, label }) {
-  return <div className="rating" aria-label={`${label} ${value}/5`}><span className="rating-bars">{[1,2,3,4,5].map(n=><i key={n} className={n<=value?"filled":""}/>)}</span><small>{value>=5?"极强":value>=4?"强":value>=3?"中":"基础"}</small></div>;
+function ModelMark({ model }) { const Icon=PROVIDER_ICONS[model.provider]; return <span className={`provider-mark provider-${model.provider.toLowerCase()}`}><Icon/></span>; }
+function Rating({ value, label }) { return <div className="rating" aria-label={`${label} ${value}/5`}><span className="rating-bars">{[1,2,3,4,5].map(n=><i key={n} className={n<=value?"filled":""}/>)}</span><small>{value>=5?"极强":value>=4?"强":value>=3?"中":"基础"}</small></div>; }
+function Filter({ label, value, onChange, options }) { return <label className="filter"><span>{label}</span><select value={value} onChange={e=>onChange(e.target.value)}><option value="all">全部</option>{options.map(x=><option key={x} value={x}>{x}</option>)}</select><PiCaretDown/></label>; }
+
+function PageHero({ eyebrow, title, description, aside }) {
+  return <div className="page-hero"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p>{description}</p></div>{aside&&<aside>{aside}</aside>}</div>;
 }
-function Filter({ label, value, onChange, options }) {
-  return <label className="filter"><span>{label}</span><select value={value} onChange={e=>onChange(e.target.value)}><option value="all">全部</option>{options.map(x=><option key={x} value={x}>{x}</option>)}</select><PiCaretDown /></label>;
-}
-function ModelMark({ model }) {
-  const Icon=PROVIDER_ICONS[model.provider];
-  return <span className={`provider-mark provider-${model.provider.toLowerCase()}`}><Icon /></span>;
-}
-function CompareView({ selected, onBack, onRemove }) {
-  const benchmarks=["SWE-bench","GPQA","LiveBench Coding"];
-  return <section className="compare-view">
-    <button className="text-button" onClick={onBack}><PiArrowLeft/> 返回模型图谱</button>
-    <div className="compare-title"><div><p className="eyebrow">最近 3 个月 · 数据截至 2026-09-20</p><h1>模型对比</h1><p>对比明确的模型变体与服务端点，不混合不同渠道数据。</p></div><span className="freshness"><PiClockCounterClockwise/> 90 天窗口</span></div>
-    <div className="compare-grid" style={{"--columns":selected.length}}>
-      <div className="compare-label blank"/>
-      {selected.map(m=><article className="compare-head" key={m.id}><button onClick={()=>onRemove(m.id)} aria-label={`移除 ${m.name}`}><PiX/></button><ModelMark model={m}/><strong>{m.name}</strong><span>{m.variants[0]} · {m.endpoint}</span></article>)}
-      <div className="compare-label">上下文窗口</div>{selected.map(m=><div className="compare-cell" key={`${m.id}-context`}><b>{m.context}</b></div>)}
-      {benchmarks.map(b=><div className="compare-row" key={b}><div className="compare-label">{b}<small>权威评测集</small></div>{selected.map(m=>{const best=Math.max(...selected.map(x=>x.score[b]));return <div className={`compare-cell ${m.score[b]===best?"best":""}`} key={`${m.id}-${b}`}><b>{m.score[b]}</b><span>{m.score[b]===best?"当前最佳":""}</span></div>})}</div>)}
-      <div className="compare-label">来源可信度</div>{selected.map(m=><div className="compare-cell evidence" key={`${m.id}-source`}><PiCheck/><div><b>高</b><span>{m.source} · 2026-09-18</span></div></div>)}
+
+function Overview({ navigate }) {
+  return <section className="page overview-page">
+    <PageHero eyebrow="LAST 90 DAYS · 数据截至 2026-09-20" title="最近发生了什么？" description="聚合模型发布、评测变化、价格和规格更新，只保留影响决策的信号。" aside={<><strong>近三个月观察窗口</strong><span>2026-06-20 — 2026-09-20</span></>}/>
+    <div className="overview-grid">
+      <article className="panel activity-panel"><header><div><p className="section-kicker">LATEST CHANGES</p><h2>重要变化</h2></div><button className="text-button" onClick={()=>navigate("models")}>查看模型 <PiArrowRight/></button></header>
+        <div className="activity-list">{UPDATES.map(({type,icon:Icon,tone,title,detail,date,source})=><div className="activity-row" key={title}><span className={`activity-icon ${tone}`}><Icon/></span><div><small>{type}</small><strong>{title}</strong><p>{detail}</p></div><div className="activity-meta"><b>{date}</b><span>{source}</span></div></div>)}</div>
+      </article>
+      <aside className="panel watch-panel"><p className="section-kicker">WATCHLIST</p><h2>值得关注</h2><p className="panel-intro">近期变化幅度较大的模型。</p>{MODELS.slice(0,4).map((m,index)=><div className="watch-row" key={m.id}><span>{index+1}</span><ModelMark model={m}/><div><strong>{m.name}</strong><small>{m.provider} · {m.context}</small></div><b>{m.eval}</b></div>)}<button className="primary wide" onClick={()=>navigate("models")}>选择模型进行对比 <PiArrowRight/></button></aside>
     </div>
+    <article className="panel pulse-panel"><header><div><p className="section-kicker">BENCHMARK PULSE</p><h2>评测变化速览</h2></div><button className="text-button" onClick={()=>navigate("benchmarks")}>查看全部基准 <PiArrowRight/></button></header><div className="pulse-list"><div><span>SWE-bench Verified</span><strong>GPT-5.2</strong><b className="positive">+5.8%</b></div><div><span>GPQA Diamond</span><strong>Gemini 2.5 Pro</strong><b className="positive">+2.7%</b></div><div><span>LiveBench Coding</span><strong>Qwen3 Max</strong><b className="positive">+3.1%</b></div></div></article>
+  </section>;
+}
+
+function SelectionDock({ selected, toggle, navigate }) {
+  const message=selected.length===0?"选择 2–5 个模型开始对比":selected.length===1?"已选 1 个，再选 1 个即可对比":`已选 ${selected.length} 个模型`;
+  return <div className={`selection-dock ${selected.length?"has-selection":""}`} aria-live="polite"><div className="selection-summary"><strong>{message}</strong><span>比较时会明确 Variant 与 Endpoint</span></div><div className="selection-chips">{selected.map(m=><span className="selection-chip" key={m.id}><ModelMark model={m}/><span><b>{m.name}</b><small>{m.variants[0]} · {m.endpoint}</small></span><button onClick={()=>toggle(m.id)} aria-label={`移除 ${m.name}`}><PiX/></button></span>)}</div><button className="primary" disabled={selected.length<2} onClick={()=>navigate("compare")}>{selected.length<2?"继续选择":"开始对比"} <PiArrowRight/></button></div>;
+}
+
+function ModelCatalog({ query, setQuery, selected, selectedIds, toggle, provider, setProvider, capability, setCapability, openWeight, setOpenWeight, navigate }) {
+  const filtered=useMemo(()=>MODELS.filter(m=>`${m.name} ${m.provider}`.toLowerCase().includes(query.toLowerCase())&&(provider==="all"||m.provider===provider)&&(openWeight==="all"||(openWeight==="yes"?m.openWeight:!m.openWeight))&&(capability==="all"||m[capability]>=4)),[query,provider,capability,openWeight]);
+  return <section className="catalog page"><PageHero eyebrow="MODEL INTELLIGENCE · 近 3 个月" title="模型图谱" description="收录经过验证的主流模型、变体与推理端点，快速筛选并进入可信对比。" aside={<><strong>独立 · 客观 · 可追溯</strong><span>连接模型、评测与真实应用</span></>}/>
+    <div className="catalog-surface"><div className="filters"><label className="model-search"><PiMagnifyingGlass/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索模型名称、提供商或关键词…"/></label><Filter label="Provider" value={provider} onChange={setProvider} options={["OpenAI","Anthropic","Google","Meta","DeepSeek","Alibaba"]}/><Filter label="能力" value={capability} onChange={setCapability} options={["reasoning","vision","tools"]}/><Filter label="Open Weight" value={openWeight} onChange={setOpenWeight} options={["yes","no"]}/></div>
+      <SelectionDock selected={selected} toggle={toggle} navigate={navigate}/>
+      <div className="table-wrap"><table><thead><tr><th/><th>Model</th><th>Provider</th><th>Release</th><th>Context</th><th>Reasoning</th><th>Vision</th><th>Tool Use</th><th>Latest Eval</th><th>Status</th></tr></thead><tbody>{filtered.map(m=>{const checked=selectedIds.includes(m.id);return <tr key={m.id} className={checked?"selected":""}><td><button className={`checkbox ${checked?"checked":""}`} onClick={()=>toggle(m.id)} aria-label={`${checked?"取消选择":"选择"} ${m.name}`}>{checked&&<PiCheck/>}</button></td><td><div className="model-name"><strong>{m.name}</strong><span>{m.variants.length} variants</span><small>{m.variants.join(" · ")}</small></div></td><td><div className="provider"><ModelMark model={m}/><span>{m.provider}</span></div></td><td>{m.release}</td><td><b>{m.context}</b><small>tokens</small></td><td><Rating value={m.reasoning} label="Reasoning"/></td><td><Rating value={m.vision} label="Vision"/></td><td><Rating value={m.tools} label="Tool use"/></td><td><div className="eval"><b>{m.eval}</b><span>{m.benchmark}</span><small>{m.source}</small></div></td><td><div className="status"><i/>可用<small>{m.endpoint}</small></div></td></tr>})}</tbody></table>{filtered.length===0&&<div className="empty">没有符合当前筛选条件的模型</div>}</div>
+      <footer className="table-footer"><span>显示 {filtered.length} 个模型 · 时间范围：2026-06-20 至 2026-09-20</span><span><PiInfo/> 数据来源：官方发布与权威评测集 · 最后更新 2026-09-20</span></footer></div>
+  </section>;
+}
+
+function CompareView({ selected, navigate, toggle }) {
+  const benchmarks=["SWE-bench","GPQA","LiveBench Coding"];
+  if(selected.length<2) return <section className="page compare-view"><PageHero eyebrow="MODEL COMPARE" title="模型对比" description="选择 2–5 个明确的 Variant 与 Endpoint，避免混合不同渠道的数据。"/><div className="panel compare-empty"><span className="empty-icon"><PiTrendUp/></span><h2>{selected.length===1?"再选 1 个模型即可开始":"还没有选择模型"}</h2><p>{selected.length===1?`${selected[0].name} 已加入对比。`:"从模型图谱中选择你真正关心的候选项。"}</p><button className="primary" onClick={()=>navigate("models")}>去选择模型 <PiArrowRight/></button></div></section>;
+  return <section className="compare-view page"><button className="text-button" onClick={()=>navigate("models")}><PiArrowLeft/> 返回模型图谱</button><div className="compare-title"><div><p className="eyebrow">最近 3 个月 · 数据截至 2026-09-20</p><h1>模型对比</h1><p>对比明确的模型变体与服务端点，不混合不同渠道数据。</p></div><span className="freshness"><PiClockCounterClockwise/> 90 天窗口</span></div><div className="compare-grid" style={{"--columns":selected.length}}><div className="compare-label blank"/>{selected.map(m=><article className="compare-head" key={m.id}><button onClick={()=>toggle(m.id)} aria-label={`移除 ${m.name}`}><PiX/></button><ModelMark model={m}/><strong>{m.name}</strong><span>{m.variants[0]} · {m.endpoint}</span></article>)}<div className="compare-label">上下文窗口</div>{selected.map(m=><div className="compare-cell" key={`${m.id}-context`}><b>{m.context}</b></div>)}{benchmarks.map(b=><div className="compare-row" key={b}><div className="compare-label">{b}<small>权威评测集</small></div>{selected.map(m=>{const best=Math.max(...selected.map(x=>x.score[b]));return <div className={`compare-cell ${m.score[b]===best?"best":""}`} key={`${m.id}-${b}`}><b>{m.score[b]}</b><span>{m.score[b]===best?"当前最佳":""}</span></div>})}</div>)}<div className="compare-label">来源可信度</div>{selected.map(m=><div className="compare-cell evidence" key={`${m.id}-source`}><PiCheck/><div><b>高</b><span>{m.source} · 2026-09-18</span></div></div>)}</div></section>;
+}
+
+function Benchmarks() {
+  const [search,setSearch]=useState(""), [category,setCategory]=useState("all"), [active,setActive]=useState("swe-bench");
+  const rows=BENCHMARKS.filter(b=>(b.name+b.capability).toLowerCase().includes(search.toLowerCase())&&(category==="all"||b.category===category));
+  const detail=BENCHMARKS.find(b=>b.id===active);
+  return <section className="page benchmark-page"><PageHero eyebrow="BENCHMARK REGISTRY · 近 3 个月" title="基准目录" description="理解每个分数测量什么、使用哪个版本，以及结果是否存在污染风险。" aside={<><strong>{BENCHMARKS.length} 个核心基准</strong><span>版本、Metric 与来源可追溯</span></>}/>
+    <div className="panel benchmark-panel"><div className="benchmark-tools"><label className="model-search"><PiMagnifyingGlass/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜索基准或能力…"/></label><Filter label="分类" value={category} onChange={setCategory} options={["代码","推理","多模态"]}/></div><div className="benchmark-list"><div className="benchmark-list-head"><span>Benchmark</span><span>能力</span><span>版本 / Metric</span><span>污染风险</span><span>最近更新</span><span/></div>{rows.map(b=><button className={`benchmark-row ${active===b.id?"active":""}`} key={b.id} onClick={()=>setActive(b.id)}><span><b>{b.name}</b><small>{b.category} · {b.results} 个模型结果</small></span><span>{b.capability}</span><span><b>{b.version}</b><small>{b.metric}</small></span><span className={`risk risk-${b.risk}`}>{b.risk}</span><span>{b.updated}</span><PiCaretRight/></button>)}</div></div>
+    {detail&&<article className="panel benchmark-detail"><div><p className="section-kicker">BENCHMARK DETAIL</p><h2>{detail.name}</h2><p>{detail.description}</p></div><dl><div><dt>评测方法</dt><dd>{detail.method}</dd></div><div><dt>当前版本</dt><dd>{detail.version}</dd></div><div><dt>Metric</dt><dd>{detail.metric}</dd></div><div><dt>污染风险</dt><dd><PiShieldWarning/> {detail.risk}</dd></div></dl></article>}
   </section>;
 }
 
 export function App() {
-  const [view,setView]=useState("models"), [query,setQuery]=useState(""), [provider,setProvider]=useState("all"), [capability,setCapability]=useState("all"), [openWeight,setOpenWeight]=useState("all"), [selectedIds,setSelectedIds]=useState(["gpt-5-2","gemini-2-5-pro"]);
+  const pathToView=()=>Object.entries(ROUTES).find(([,path])=>path===location.pathname)?.[0]||"overview";
+  const [view,setView]=useState(pathToView), [query,setQuery]=useState(""), [provider,setProvider]=useState("all"), [capability,setCapability]=useState("all"), [openWeight,setOpenWeight]=useState("all"), [selectedIds,setSelectedIds]=useState([]);
   const selected=MODELS.filter(m=>selectedIds.includes(m.id));
-  const filtered=useMemo(()=>MODELS.filter(m=>`${m.name} ${m.provider}`.toLowerCase().includes(query.toLowerCase())&&(provider==="all"||m.provider===provider)&&(openWeight==="all"||(openWeight==="yes"?m.openWeight:!m.openWeight))&&(capability==="all"||m[capability]>=4)),[query,provider,capability,openWeight]);
+  const navigate=next=>{ setView(next); if(location.pathname!==ROUTES[next]) history.pushState({},"",ROUTES[next]); window.scrollTo({top:0,behavior:"instant"}); };
+  useEffect(()=>{ const onPop=()=>setView(pathToView()); addEventListener("popstate",onPop); return()=>removeEventListener("popstate",onPop); },[]);
   const toggle=id=>setSelectedIds(now=>now.includes(id)?now.filter(x=>x!==id):now.length<5?[...now,id]:now);
-  const removeFromCompare=id=>{ toggle(id); if(selected.length<=2) setView("models"); };
-  return <div className="app-shell">
-    <header className="topbar"><button className="brand" onClick={()=>setView("models")}><PiCrosshair/><strong>Model Radar</strong><span>更清晰的模型世界</span></button><nav><button>概览</button><button className={view==="models"?"active":""} onClick={()=>setView("models")}>模型</button><button className={view==="compare"?"active":""} onClick={()=>selected.length>=2&&setView("compare")}>对比</button><button>基准</button></nav><label className="global-search"><PiMagnifyingGlass/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索模型、提供商或能力"/></label><span className="demo-badge">演示数据</span><span className="as-of">数据截至 2026-09-20</span></header>
-    <main>{view==="compare"?<CompareView selected={selected} onBack={()=>setView("models")} onRemove={removeFromCompare}/>:<section className="catalog">
-      <div className="hero"><div><p className="eyebrow">MODEL INTELLIGENCE · 近 3 个月</p><h1>模型图谱</h1><p>收录经过验证的主流模型、变体与推理端点，快速筛选并进入可信对比。</p></div><aside><strong>独立 · 客观 · 可追溯</strong><span>连接模型、评测与真实应用</span></aside></div>
-      <div className="catalog-surface"><div className="filters"><label className="model-search"><PiMagnifyingGlass/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索模型名称、提供商或关键词…"/></label><Filter label="Provider" value={provider} onChange={setProvider} options={["OpenAI","Anthropic","Google","Meta","DeepSeek","Alibaba"]}/><Filter label="能力" value={capability} onChange={setCapability} options={["reasoning","vision","tools"]}/><Filter label="Open Weight" value={openWeight} onChange={setOpenWeight} options={["yes","no"]}/><button className="selection-action" disabled={selected.length<2} onClick={()=>setView("compare")}>已选 {selected.length} / 5 · 去对比 <PiArrowRight/></button></div>
-        <div className="table-wrap"><table><thead><tr><th/><th>Model</th><th>Provider</th><th>Release</th><th>Context</th><th>Reasoning</th><th>Vision</th><th>Tool Use</th><th>Latest Eval</th><th>Status</th></tr></thead><tbody>{filtered.map(m=>{const checked=selectedIds.includes(m.id);return <tr key={m.id} className={checked?"selected":""}><td><button className={`checkbox ${checked?"checked":""}`} onClick={()=>toggle(m.id)} aria-label={`${checked?"取消选择":"选择"} ${m.name}`}>{checked&&<PiCheck/>}</button></td><td><div className="model-name"><strong>{m.name}</strong><span>{m.variants.length} variants</span><small>{m.variants.join(" · ")}</small></div></td><td><div className="provider"><ModelMark model={m}/><span>{m.provider}</span></div></td><td>{m.release}</td><td><b>{m.context}</b><small>tokens</small></td><td><Rating value={m.reasoning} label="Reasoning"/></td><td><Rating value={m.vision} label="Vision"/></td><td><Rating value={m.tools} label="Tool use"/></td><td><div className="eval"><b>{m.eval}</b><span>{m.benchmark}</span><small>{m.source}</small></div></td><td><div className="status"><i/>可用<small>{m.endpoint}</small></div></td></tr>})}</tbody></table>{filtered.length===0&&<div className="empty">没有符合当前筛选条件的模型</div>}</div>
-        <footer className="table-footer"><span>显示 {filtered.length} 个模型 · 时间范围：2026-06-20 至 2026-09-20</span><span><PiInfo/> 数据来源：官方发布与权威评测集 · 最后更新 2026-09-20</span></footer></div>
-      {selected.length>0&&<div className="compare-shelf"><div className="shelf-title"><strong>已选模型 ({selected.length} / 5)</strong><span>确认变体与端点后对比</span></div><div className="shelf-items">{selected.map(m=><div className="shelf-item" key={m.id}><ModelMark model={m}/><div><strong>{m.name}</strong><span>{m.variants[0]} · {m.endpoint}</span></div><button onClick={()=>toggle(m.id)} aria-label={`移除 ${m.name}`}><PiX/></button></div>)}</div><button className="primary" disabled={selected.length<2} onClick={()=>setView("compare")}>对比 {selected.length} 个模型 <PiArrowRight/></button></div>}
-    </section>}</main>
-  </div>;
+  const globalSearch=e=>{ setQuery(e.target.value); if(view!=="models") navigate("models"); };
+  const nav=[{id:"overview",label:"概览"},{id:"models",label:"模型"},{id:"compare",label:"对比"},{id:"benchmarks",label:"基准"}];
+  return <div className="app-shell"><header className="topbar"><button className="brand" onClick={()=>navigate("overview")}><PiCrosshair/><strong>Model Radar</strong><span>更清晰的模型世界</span></button><nav aria-label="主导航">{nav.map(item=><button key={item.id} className={view===item.id?"active":""} aria-current={view===item.id?"page":undefined} onClick={()=>navigate(item.id)}>{item.label}</button>)}</nav><label className="global-search"><PiMagnifyingGlass/><input value={query} onChange={globalSearch} placeholder="搜索模型、提供商或能力"/></label><span className="demo-badge">演示数据</span><span className="as-of">数据截至 2026-09-20</span></header><main>
+    {view==="overview"&&<Overview navigate={navigate}/>} {view==="models"&&<ModelCatalog query={query} setQuery={setQuery} selected={selected} selectedIds={selectedIds} toggle={toggle} provider={provider} setProvider={setProvider} capability={capability} setCapability={setCapability} openWeight={openWeight} setOpenWeight={setOpenWeight} navigate={navigate}/>} {view==="compare"&&<CompareView selected={selected} navigate={navigate} toggle={toggle}/>} {view==="benchmarks"&&<Benchmarks/>}
+  </main></div>;
 }

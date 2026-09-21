@@ -1,43 +1,41 @@
 # Design QA
 
 - Source visual truth: `C:\Users\01416344\.codex\generated_images\01a0bceb-44e9-7843-ab10-fbe9052fbad9\exec-352bbee2-fbf9-4e8e-babc-b64e56188092.png`
-- Implementation screenshots: `qa/catalog.png`, `qa/compare.png`, `qa/mobile.png`
-- Viewport: 1440 × 1024 CSS px, device scale factor 1
-- State: model catalog with GPT-5.2 and Gemini 2.5 Pro selected; two-model comparison
-- Source pixels: 1488 × 1058
-- Implementation pixels: 1440 × 1024
-- Density normalization: both images have an equivalent 1.406 aspect ratio; the source was visually compared at the implementation's 1440 × 1024 display scale.
+- Implementation screenshots: `qa/overview.png`, `qa/catalog.png`, `qa/compare.png`, `qa/benchmarks.png`, `qa/mobile.png`
+- Desktop viewport: 1440 x 1024 CSS px; mobile viewport: 390 x 844 CSS px
+- Scope: all four primary sections, model selection, comparison, benchmark detail, and mobile behavior
 
 ## Evidence
 
-- Full-view comparison: the implementation preserves the source hierarchy and proportions—top navigation, restrained hero, single filter surface, six-row data table, provenance footer, and fixed comparison shelf. The reduced filter count is an intentional response to the request for a concise implementation.
-- Focused-region comparison: separate crops were unnecessary because table typography, capability bars, provider marks, selected rows, footer provenance, and shelf controls are legible in the original-resolution captures.
-- Fonts and typography: system/Chinese sans-serif fallback closely matches the neutral source hierarchy; headings, table labels, metadata, and numeric emphasis remain readable.
-- Spacing and layout: 28–30 px outer margins, compact 68 px navigation, table row rhythm, filter alignment, and bottom shelf match the source's density without clipping.
-- Colors and tokens: cool gray surface, ink text, blue selection/action states, teal capability marks, and green availability/best-score semantics match the reference direction with accessible contrast.
-- Image and icon quality: no raster placeholders or handcrafted SVGs are used; Phosphor and Simple Icons provide crisp interface/provider marks.
-- Copy and content: the three-month window, explicit variant/endpoint labels, source confidence, and demo-data disclosure are visible.
-- Primary interactions tested in Chromium: provider filter, empty search result, two-model selection, enter comparison, return to catalog.
+- The selected light “Model Atlas” direction remains intact: cool-gray canvas, crisp white surfaces, restrained blue accents, compact metadata, and dense but readable tables.
+- Overview now gives the previously inactive entry a useful job: recent changes, a watchlist, and benchmark movement, all scoped to the latest 90 days.
+- Models keeps the six-row catalog and exposes the selected models immediately below the filters. The 0/1/2+ states provide explicit guidance and the action is enabled only when comparison is valid.
+- Compare supports direct navigation with a useful empty state and a complete two-model state with variant, endpoint, benchmark, and provenance context.
+- Benchmarks now provides a searchable/filterable registry and in-page detail instead of a dead navigation item.
+- All four top-level actions update the URL (`/`, `/models`, `/compare`, `/benchmarks`) and active navigation state.
+- Chromium regression coverage passed for navigation, filtering, empty search, model selection, comparison, benchmark expansion, and mobile layout.
 - Browser console errors: 0.
-- Responsive check: 390 × 844 catalog has no page-level horizontal overflow; the dense data table scrolls within its own surface and the primary compare action remains visible.
+- Mobile has no page-level horizontal overflow. The technical model table intentionally scrolls inside its bounded surface.
+
+## Comparison history
+
+1. The first implementation matched the selected catalog visual but left Overview and Benchmarks inactive and placed selected models in a fixed bottom shelf.
+2. The UX audit reproduced both issues at desktop size and documented the hidden-selection risk.
+3. The current pass implemented meaningful Overview and Benchmarks pages, stable routes, direct Compare guidance, and a selection dock beneath the filters.
+4. Visual review at desktop and mobile found no clipping, broken hierarchy, or inaccessible active state.
 
 ## Findings
 
 - No actionable P0, P1, or P2 issues remain.
-- P3: provider marks differ slightly from the generated reference because official marks available in the selected icon library were used instead of approximated artwork.
-- P3: the mobile table intentionally uses contained horizontal scrolling rather than collapsing technical comparison columns.
+- P3: provider marks differ slightly from the generated reference because official marks from the selected icon library are used.
+- P3: the mobile data table uses contained horizontal scrolling to preserve technical columns.
 
-## Comparison history
+## Verification
 
-1. Initial pass was blocked because no browser-rendered capture existed.
-2. Chromium authorization enabled catalog and compare captures. The pass found two product-level issues: mock data was not disclosed and removing a model could leave an invalid one-item comparison.
-3. Added an `演示数据` label and automatic return to the catalog below two comparison items. Rebuilt, reran browser interactions, captured both states, and confirmed zero console errors.
-
-## Implementation checklist
-
-- [x] Source and implementation compared at equivalent aspect ratio.
-- [x] Core list/filter/select/compare flow works.
-- [x] Three-month scope and provenance are visible.
-- [x] Build, Sites packaging tests, and browser QA pass.
+- [x] Production build passes.
+- [x] Sites packaging and route fallback tests pass.
+- [x] Browser interaction test passes with zero console errors.
+- [x] Desktop overview, catalog, compare, and benchmark screenshots inspected.
+- [x] Mobile selected-model state inspected.
 
 final result: passed
