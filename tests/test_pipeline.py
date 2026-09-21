@@ -92,7 +92,11 @@ def test_pipeline_success_upserts_and_enqueues(engine, session, registry, tmp_pa
         {"model_name": "gpt-5.2", "index_name": "gpqa-diamond", "value": 48.2,
          "sample_size": 500, "id": "aa-1"},  # pure replay
         {"model_name": "mystery-model-x", "index_name": "gpqa-diamond",
-         "value": 12.0, "id": "aa-2"},  # unmatched -> queue
+         "value": 12.0, "id": "aa-2", "model_id": "aa-model-2"},  # unmatched -> one queue per model
+        {"model_name": "mystery-model-x", "index_name": "another-index",
+         "value": 15.0, "id": "aa-2b", "model_id": "aa-model-2"},
+        {"model_name": "mystery-model-x", "index_name": "gpqa-diamond",
+         "value": 12.0, "id": "aa-2c", "model_id": "aa-model-2"},
         {"model_name": "gpt-5.2", "index_name": "unknown-benchmark",
          "value": 90.0, "id": "aa-3"},  # unknown benchmark -> skipped
     ]

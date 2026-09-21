@@ -239,17 +239,18 @@ def run_sync_pipeline(
                     unmatched.append((row, result))
 
             queued = 0
+            queued_external_ids = set(
+                session.scalars(
+                    select(EntityResolutionQueue.external_id).where(
+                        EntityResolutionQueue.source_id == source_id,
+                        EntityResolutionQueue.record_type == "model_variant",
+                    )
+                ).all()
+            )
             for row, result in unmatched:
                 name = str(row.get("model_name"))
                 external_id = str(row.get("model_id") or row.get("id") or name)
-                existing = session.scalar(
-                    select(EntityResolutionQueue).where(
-                        EntityResolutionQueue.source_id == source_id,
-                        EntityResolutionQueue.record_type == "model_variant",
-                        EntityResolutionQueue.external_id == external_id,
-                    )
-                )
-                if existing is None:
+                if external_id not in queued_external_ids:
                     session.add(
                         EntityResolutionQueue(
                             source_id=source_id,
@@ -263,6 +264,7 @@ def run_sync_pipeline(
                             status="pending",
                         )
                     )
+                    queued_external_ids.add(external_id)
                     queued += 1
             tracker.succeed(
                 "entity_resolution",

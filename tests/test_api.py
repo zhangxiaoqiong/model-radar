@@ -156,6 +156,15 @@ def test_models_list_filters_by_provider(client, seeded):
     assert r.json()["items"] == []
 
 
+def test_models_list_summary_includes_variant_and_endpoint(client, seeded):
+    r = client.get("/api/v1/models", params={"include_summary": True})
+    assert r.status_code == 200
+    item = r.json()["items"][0]
+    assert item["variant"]["id"] == seeded["variant_id"]
+    assert item["endpoint"]["id"] == seeded["endpoint_id"]
+    assert item["evaluations"] == []
+
+
 def test_models_detail_with_variants_and_endpoints(client, seeded):
     r = client.get(f"/api/v1/models/{seeded['release_slug']}")
     assert r.status_code == 200

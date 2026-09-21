@@ -63,9 +63,10 @@ npm install
 npm run dev -- --port 4173
 ```
 
-Open `http://localhost:4173/`. The current UI uses clearly labelled demo data
-for the latest three-month window; API-backed production data is the next
-integration step.
+Open `http://localhost:4173/`. In local development Vite proxies `/api` to the
+FastAPI service on port 8000. The UI loads the MySQL-backed registry and the
+latest Artificial Analysis snapshot; if the API is unavailable it falls back
+to clearly labelled demo data.
 
 ## API surface (V1a)
 

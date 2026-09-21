@@ -4,6 +4,7 @@
 - Implementation screenshots: `qa/overview.png`, `qa/catalog.png`, `qa/compare.png`, `qa/benchmarks.png`, `qa/mobile.png`
 - Desktop viewport: 1440 x 1024 CSS px; mobile viewport: 390 x 844 CSS px
 - Scope: all four primary sections, model selection, comparison, benchmark detail, and mobile behavior
+- Data state: FastAPI/MySQL live response with 20 tracked releases, 17 benchmarks, and Artificial Analysis snapshot-backed scores
 
 ## Evidence
 
@@ -14,6 +15,7 @@
 - Benchmarks now provides a searchable/filterable registry and in-page detail instead of a dead navigation item.
 - All four top-level actions update the URL (`/`, `/models`, `/compare`, `/benchmarks`) and active navigation state.
 - Chromium regression coverage passed for navigation, filtering, empty search, model selection, comparison, benchmark expansion, and mobile layout.
+- The header displays `真实数据` only after successful API loading. The model table and comparison now use AA Intelligence, Coding, and Agentic index values from the stored snapshot rather than the static sample scores.
 - Browser console errors: 0.
 - Mobile has no page-level horizontal overflow. The technical model table intentionally scrolls inside its bounded surface.
 

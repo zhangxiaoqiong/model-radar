@@ -71,6 +71,15 @@ def load_yaml(name: str) -> list[dict]:
         return yaml.safe_load(f) or []
 
 
+def parse_seed_date(value) -> date | None:
+    """Accept both YAML-native dates and quoted ISO date strings."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value))
+
+
 def seed_providers_and_sources(session) -> None:
     for slug, name, ptype, website in PROVIDERS:
         obj = session.scalar(select(Provider).where(Provider.slug == slug))
@@ -191,8 +200,8 @@ def seed_models(session) -> int:
                 family_id=family.id,
                 canonical_name=row["canonical_name"],
                 slug=row["release_slug"],
-                release_date=date.fromisoformat(row["release_date"]) if row.get("release_date") else None,
-                knowledge_cutoff=date.fromisoformat(row["knowledge_cutoff"]) if row.get("knowledge_cutoff") else None,
+                release_date=parse_seed_date(row.get("release_date")),
+                knowledge_cutoff=parse_seed_date(row.get("knowledge_cutoff")),
                 open_weight=row.get("open_weight", False),
                 license=row.get("license"),
                 status=row.get("status", "preview"),

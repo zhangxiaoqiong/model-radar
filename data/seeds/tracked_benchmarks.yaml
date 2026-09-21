@@ -31,7 +31,7 @@
   version: v2
   metric:
     slug: percent_solved
-    name: % Solved
+    name: "% Solved"
     unit: percent
     score_direction: higher_better
     normalization_method: minmax
@@ -257,3 +257,58 @@
     normalization_method: none   # Elo is not min-max normalizable (spec §6)
   capabilities:
     - {slug: language, weight: 1.0}
+
+- slug: artificial_analysis_intelligence_index
+  name: Artificial Analysis Intelligence Index
+  category: composite
+  description: Composite intelligence score published by Artificial Analysis
+  official_url: https://artificialanalysis.ai/
+  dataset_public: false
+  dynamic: true
+  contamination_risk: medium
+  version: rolling
+  metric:
+    slug: index_score
+    name: Index Score
+    unit: score
+    score_direction: higher_better
+    normalization_method: minmax
+  capabilities:
+    - {slug: reasoning, weight: 0.5}
+    - {slug: language, weight: 0.5}
+
+- slug: artificial_analysis_coding_index
+  name: Artificial Analysis Coding Index
+  category: coding
+  description: Composite coding score published by Artificial Analysis
+  official_url: https://artificialanalysis.ai/
+  dataset_public: false
+  dynamic: true
+  contamination_risk: medium
+  version: rolling
+  metric:
+    slug: index_score
+    name: Index Score
+    unit: score
+    score_direction: higher_better
+    normalization_method: minmax
+  capabilities:
+    - {slug: coding, weight: 1.0}
+
+- slug: artificial_analysis_agentic_index
+  name: Artificial Analysis Agentic Index
+  category: agent
+  description: Composite agentic-task score published by Artificial Analysis
+  official_url: https://artificialanalysis.ai/
+  dataset_public: false
+  dynamic: true
+  contamination_risk: medium
+  version: rolling
+  metric:
+    slug: index_score
+    name: Index Score
+    unit: score
+    score_direction: higher_better
+    normalization_method: minmax
+  capabilities:
+    - {slug: agent, weight: 1.0}

@@ -18,6 +18,7 @@ from backend_core.domain import (
     ModelRelease,
     ModelVariant,
     Provider,
+    Source,
 )
 
 from ..deps import get_db_session, row_dict
@@ -54,6 +55,7 @@ def list_models(
     status: str = Query(default="active"),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
+    include_summary: bool = Query(default=False),
 ):
     stmt = (
         select(ModelRelease)
@@ -78,6 +80,38 @@ def list_models(
         prov = session.get(Provider, family.provider_id)
         d["provider"] = prov.slug
         d["family"] = family.slug
+        if include_summary and r.default_variant_id:
+            variant = session.get(ModelVariant, r.default_variant_id)
+            endpoint = session.scalar(
+                select(ModelEndpoint)
+                .where(ModelEndpoint.model_variant_id == variant.id)
+                .order_by(ModelEndpoint.endpoint_type, ModelEndpoint.external_model_id)
+                .limit(1)
+            )
+            superseded_ids = select(Evaluation.supersedes_evaluation_id).where(
+                Evaluation.supersedes_evaluation_id.is_not(None)
+            )
+            evaluations = session.scalars(
+                select(Evaluation).where(
+                    Evaluation.model_variant_id == variant.id,
+                    Evaluation.id.not_in(superseded_ids),
+                ).order_by(Evaluation.created_at.desc())
+            ).all()
+            evaluation_items = []
+            for evaluation in evaluations:
+                benchmark = session.get(Benchmark, evaluation.benchmark_id)
+                source = session.get(Source, evaluation.source_id)
+                evaluation_items.append({
+                    "benchmark_slug": benchmark.slug,
+                    "benchmark_name": benchmark.name,
+                    "score": str(evaluation.score),
+                    "source": source.name,
+                    "source_snapshot_id": evaluation.source_snapshot_id,
+                    "observed_at": evaluation.created_at,
+                })
+            d["variant"] = row_dict(variant, VARIANT_COLUMNS)
+            d["endpoint"] = row_dict(endpoint, ENDPOINT_COLUMNS) if endpoint else None
+            d["evaluations"] = evaluation_items
         items.append(d)
     return {"items": items, "next_cursor": result["next_cursor"]}
 
