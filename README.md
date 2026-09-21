@@ -14,6 +14,7 @@ Python 3.12 · FastAPI · SQLAlchemy 2.0 · MySQL 5.7 (utf8mb4, InnoDB, naive-UT
 packages/backend_core   # domain models, config, db, services (fingerprints, upsert)
 packages/ingestion      # AA adapter, normalizers, entity resolution, sync pipeline
 apps/api                # FastAPI app (public read + admin ops)
+apps/web                # React/Vite product UI (model catalog + compare)
 scripts/                # seed, migrations runner, sync, scheduler
 data/seeds/             # tracked_models / tracked_benchmarks / capabilities (YAML)
 data/raw/               # raw source snapshots (never committed)
@@ -53,6 +54,18 @@ python scripts/run_sync.py --dry-run   # peek at what AA returns
 python scripts/run_sync.py             # full pipeline
 python scripts/scheduler.py            # or scheduled daily sync
 ```
+
+## Web product preview
+
+```powershell
+cd apps/web
+npm install
+npm run dev -- --port 4173
+```
+
+Open `http://localhost:4173/`. The current UI uses clearly labelled demo data
+for the latest three-month window; API-backed production data is the next
+integration step.
 
 ## API surface (V1a)
 

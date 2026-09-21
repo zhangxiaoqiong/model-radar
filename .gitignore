@@ -19,6 +19,7 @@ __pycache__/
 # Node / Next.js
 node_modules/
 .next/
+dist/
 coverage/
 
 # Generated and local files
