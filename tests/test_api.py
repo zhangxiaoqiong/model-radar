@@ -156,6 +156,17 @@ def test_models_list_filters_by_provider(client, seeded):
     assert r.json()["items"] == []
 
 
+def test_status_endpoint_reports_freshness(client, seeded):
+    r = client.get("/api/v1/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["latest_snapshot_time"] is None  # no snapshots in test db
+    assert body["latest_pipeline"] is None
+    assert body["evaluation_count"] == 0
+    assert body["current_evaluation_count"] == 0
+    assert body["pending_resolution_count"] == 0
+
+
 def test_models_list_summary_includes_variant_and_endpoint(client, seeded):
     r = client.get("/api/v1/models", params={"include_summary": True})
     assert r.status_code == 200

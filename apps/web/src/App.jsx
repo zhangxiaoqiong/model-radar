@@ -40,6 +40,9 @@ function compactTokens(value) {
   return String(value);
 }
 
+function stampDate(value) { return value ? String(value).slice(0, 10) : null; }
+function stampDateTime(value) { return value ? String(value).slice(0, 16).replace("T", " ") : null; }
+
 function mapApiModel(item) {
   const evaluations=item.evaluations||[], scores={};
   evaluations.forEach(e=>{ if(SCORE_LABELS[e.benchmark_slug]) scores[SCORE_LABELS[e.benchmark_slug]]=Number(e.score); });
@@ -72,12 +75,12 @@ function PageHero({ eyebrow, title, description, aside }) {
   return <div className="page-hero"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p>{description}</p></div>{aside&&<aside>{aside}</aside>}</div>;
 }
 
-function Overview({ navigate, models }) {
+function Overview({ navigate, models, syncDateLabel }) {
   const ranked=[...models].filter(m=>m.eval!==null).sort((a,b)=>b.eval-a.eval);
-  const liveUpdates=ranked.slice(0,4).map((model,index)=>({type:"真实评测",icon:PiChartLineUp,tone:["blue","violet","amber","green"][index],title:`${model.name} · ${model.benchmark} ${model.eval}`,detail:`${model.provider} · ${model.variants[0]} · ${model.endpoint}`,date:"本次同步",source:model.source}));
+  const liveUpdates=ranked.slice(0,4).map((model,index)=>({type:"真实评测",icon:PiChartLineUp,tone:["blue","violet","amber","green"][index],title:`${model.name} · ${model.benchmark} ${model.eval}`,detail:`${model.provider} · ${model.variants[0]} · ${model.endpoint}`,date:stampDate(model.observedAt)||syncDateLabel||"待同步",source:model.source}));
   const pulse=COMPARE_BENCHMARKS.map(label=>({label,model:models.filter(m=>Number.isFinite(m.score[label])).sort((a,b)=>b.score[label]-a.score[label])[0]})).filter(item=>item.model);
   return <section className="page overview-page">
-    <PageHero eyebrow="LIVE DATA · ARTIFICIAL ANALYSIS" title="最新模型雷达" description="展示已同步、可追溯到原始 Snapshot 的真实评测数据；未匹配的外部模型进入人工解析队列。" aside={<><strong>本次真实数据同步</strong><span>2026-09-21 · 近三个月范围</span></>}/>
+    <PageHero eyebrow="LIVE DATA · ARTIFICIAL ANALYSIS" title="最新模型雷达" description="展示已同步、可追溯到原始 Snapshot 的真实评测数据；未匹配的外部模型进入人工解析队列。" aside={<><strong>本次真实数据同步</strong><span>{syncDateLabel?`${syncDateLabel} · 近三个月范围`:"尚未同步 · 近三个月范围"}</span></>}/>
     <div className="overview-grid">
       <article className="panel activity-panel"><header><div><p className="section-kicker">LATEST SYNC</p><h2>最新真实评测</h2></div><button className="text-button" onClick={()=>navigate("models")}>查看模型 <PiArrowRight/></button></header>
         <div className="activity-list">{liveUpdates.map(({type,icon:Icon,tone,title,detail,date,source})=><div className="activity-row" key={title}><span className={`activity-icon ${tone}`}><Icon/></span><div><small>{type}</small><strong>{title}</strong><p>{detail}</p></div><div className="activity-meta"><b>{date}</b><span>{source}</span></div></div>)}</div>
@@ -93,21 +96,22 @@ function SelectionDock({ selected, toggle, navigate }) {
   return <div className={`selection-dock ${selected.length?"has-selection":""}`} aria-live="polite"><div className="selection-summary"><strong>{message}</strong><span>比较时会明确 Variant 与 Endpoint</span></div><div className="selection-chips">{selected.map(m=><span className="selection-chip" key={m.id}><ModelMark model={m}/><span><b>{m.name}</b><small>{m.variants[0]} · {m.endpoint}</small></span><button onClick={()=>toggle(m.id)} aria-label={`移除 ${m.name}`}><PiX/></button></span>)}</div><button className="primary" disabled={selected.length<2} onClick={()=>navigate("compare")}>{selected.length<2?"继续选择":"开始对比"} <PiArrowRight/></button></div>;
 }
 
-function ModelCatalog({ models, query, setQuery, selected, selectedIds, toggle, provider, setProvider, capability, setCapability, openWeight, setOpenWeight, navigate }) {
+function ModelCatalog({ models, query, setQuery, selected, selectedIds, toggle, provider, setProvider, capability, setCapability, openWeight, setOpenWeight, navigate, syncDateLabel, dataStatus }) {
   const providerOptions=[...new Set(models.map(m=>m.provider))];
   const filtered=useMemo(()=>models.filter(m=>`${m.name} ${m.provider}`.toLowerCase().includes(query.toLowerCase())&&(provider==="all"||m.provider===provider)&&(openWeight==="all"||(openWeight==="yes"?m.openWeight:!m.openWeight))&&(capability==="all"||m[capability]>=4)),[models,query,provider,capability,openWeight]);
   return <section className="catalog page"><PageHero eyebrow="MODEL INTELLIGENCE · 近 3 个月" title="模型图谱" description="收录经过验证的主流模型、变体与推理端点，快速筛选并进入可信对比。" aside={<><strong>独立 · 客观 · 可追溯</strong><span>连接模型、评测与真实应用</span></>}/>
     <div className="catalog-surface"><div className="filters"><label className="model-search"><PiMagnifyingGlass/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索模型名称、提供商或关键词…"/></label><Filter label="Provider" value={provider} onChange={setProvider} options={providerOptions}/><Filter label="能力" value={capability} onChange={setCapability} options={["reasoning","vision","tools"]}/><Filter label="Open Weight" value={openWeight} onChange={setOpenWeight} options={["yes","no"]}/></div>
       <SelectionDock selected={selected} toggle={toggle} navigate={navigate}/>
+      {models.length===0&&<div className="empty" role="status">{dataStatus==="loading"?"正在加载真实模型数据…":"暂无已同步模型数据，请稍后重试。"}</div>}
       <div className="table-wrap"><table><thead><tr><th/><th>Model</th><th>Provider</th><th>Release</th><th>Context</th><th>Reasoning</th><th>Vision</th><th>Tool Use</th><th>Latest Eval</th><th>Status</th></tr></thead><tbody>{filtered.map(m=>{const checked=selectedIds.includes(m.id);return <tr key={m.id} className={checked?"selected":""}><td><button className={`checkbox ${checked?"checked":""}`} onClick={()=>toggle(m.id)} aria-label={`${checked?"取消选择":"选择"} ${m.name}`}>{checked&&<PiCheck/>}</button></td><td><div className="model-name"><strong>{m.name}</strong><span>{m.variants.length} variants</span><small>{m.variants.join(" · ")}</small></div></td><td><div className="provider"><ModelMark model={m}/><span>{m.provider}</span></div></td><td>{m.release}</td><td><b>{m.context}</b><small>tokens</small></td><td><Rating value={m.reasoning} label="Reasoning"/></td><td><Rating value={m.vision} label="Vision"/></td><td><Rating value={m.tools} label="Tool use"/></td><td><div className="eval"><b>{m.eval??"—"}</b><span>{m.benchmark}</span><small>{m.source}</small></div></td><td><div className="status"><i/>{m.live?"已同步":"演示"}<small>{m.endpoint}</small></div></td></tr>})}</tbody></table>{filtered.length===0&&<div className="empty">没有符合当前筛选条件的模型</div>}</div>
-      <footer className="table-footer"><span>显示 {filtered.length} 个模型 · 近三个月跟踪范围</span><span><PiInfo/> 评测来源：Artificial Analysis · 本次同步 2026-09-21</span></footer></div>
+      <footer className="table-footer"><span>显示 {filtered.length} 个模型 · 近三个月跟踪范围</span><span><PiInfo/> 评测来源：Artificial Analysis · 本次同步 {syncDateLabel||"尚未同步"}</span></footer></div>
   </section>;
 }
 
-function CompareView({ selected, navigate, toggle }) {
+function CompareView({ selected, navigate, toggle, syncDateLabel }) {
   const benchmarks=COMPARE_BENCHMARKS;
   if(selected.length<2) return <section className="page compare-view"><PageHero eyebrow="MODEL COMPARE" title="模型对比" description="选择 2–5 个明确的 Variant 与 Endpoint，避免混合不同渠道的数据。"/><div className="panel compare-empty"><span className="empty-icon"><PiTrendUp/></span><h2>{selected.length===1?"再选 1 个模型即可开始":"还没有选择模型"}</h2><p>{selected.length===1?`${selected[0].name} 已加入对比。`:"从模型图谱中选择你真正关心的候选项。"}</p><button className="primary" onClick={()=>navigate("models")}>去选择模型 <PiArrowRight/></button></div></section>;
-  return <section className="compare-view page"><button className="text-button" onClick={()=>navigate("models")}><PiArrowLeft/> 返回模型图谱</button><div className="compare-title"><div><p className="eyebrow">最近 3 个月 · 数据截至 2026-09-20</p><h1>模型对比</h1><p>对比明确的模型变体与服务端点，不混合不同渠道数据。</p></div><span className="freshness"><PiClockCounterClockwise/> 90 天窗口</span></div><div className="compare-grid" style={{"--columns":selected.length}}><div className="compare-label blank"/>{selected.map(m=><article className="compare-head" key={m.id}><button onClick={()=>toggle(m.id)} aria-label={`移除 ${m.name}`}><PiX/></button><ModelMark model={m}/><strong>{m.name}</strong><span>{m.variants[0]} · {m.endpoint}</span></article>)}<div className="compare-label">上下文窗口</div>{selected.map(m=><div className="compare-cell" key={`${m.id}-context`}><b>{m.context}</b></div>)}{benchmarks.map(b=><div className="compare-row" key={b}><div className="compare-label">{b}<small>权威评测集</small></div>{selected.map(m=>{const best=Math.max(...selected.map(x=>x.score[b]));return <div className={`compare-cell ${m.score[b]===best?"best":""}`} key={`${m.id}-${b}`}><b>{m.score[b]}</b><span>{m.score[b]===best?"当前最佳":""}</span></div>})}</div>)}<div className="compare-label">来源可信度</div>{selected.map(m=><div className="compare-cell evidence" key={`${m.id}-source`}><PiCheck/><div><b>高</b><span>{m.source} · 2026-09-18</span></div></div>)}</div></section>;
+  return <section className="compare-view page"><button className="text-button" onClick={()=>navigate("models")}><PiArrowLeft/> 返回模型图谱</button><div className="compare-title"><div><p className="eyebrow">最近 3 个月 · 数据截至 {syncDateLabel||"待同步"}</p><h1>模型对比</h1><p>对比明确的模型变体与服务端点，不混合不同渠道数据。</p></div><span className="freshness"><PiClockCounterClockwise/> 90 天窗口</span></div><div className="compare-grid" style={{"--columns":selected.length}}><div className="compare-label blank"/>{selected.map(m=><article className="compare-head" key={m.id}><button onClick={()=>toggle(m.id)} aria-label={`移除 ${m.name}`}><PiX/></button><ModelMark model={m}/><strong>{m.name}</strong><span>{m.variants[0]} · {m.endpoint}</span></article>)}<div className="compare-label">上下文窗口</div>{selected.map(m=><div className="compare-cell" key={`${m.id}-context`}><b>{m.context}</b></div>)}{benchmarks.map(b=><div className="compare-row" key={b}><div className="compare-label">{b}<small>权威评测集</small></div>{selected.map(m=>{const best=Math.max(...selected.map(x=>x.score[b]));return <div className={`compare-cell ${m.score[b]===best?"best":""}`} key={`${m.id}-${b}`}><b>{m.score[b]}</b><span>{m.score[b]===best?"当前最佳":""}</span></div>})}</div>)}<div className="compare-label">来源可信度</div>{selected.map(m=><div className="compare-cell evidence" key={`${m.id}-source`}><PiCheck/><div><b>高</b><span>{m.source} · {stampDate(m.observedAt)||syncDateLabel||"待同步"}</span></div></div>)}</div></section>;
 }
 
 function Benchmarks({ benchmarks }) {
@@ -124,35 +128,57 @@ function Benchmarks({ benchmarks }) {
 export function App() {
   const pathToView=()=>Object.entries(ROUTES).find(([,path])=>path===location.pathname)?.[0]||"overview";
   const [view,setView]=useState(pathToView), [query,setQuery]=useState(""), [provider,setProvider]=useState("all"), [capability,setCapability]=useState("all"), [openWeight,setOpenWeight]=useState("all"), [selectedIds,setSelectedIds]=useState([]);
-  const [models,setModels]=useState([]), [benchmarks,setBenchmarks]=useState([]), [dataStatus,setDataStatus]=useState("loading");
+  const [models,setModels]=useState([]), [benchmarks,setBenchmarks]=useState([]), [dataStatus,setDataStatus]=useState("loading"), [syncInfo,setSyncInfo]=useState(null);
   const selected=models.filter(m=>selectedIds.includes(m.id));
+  const syncDateLabel=stampDate(syncInfo?.latest_snapshot_time);
+  const syncTimeLabel=stampDateTime(syncInfo?.latest_snapshot_time);
   const navigate=next=>{ setView(next); if(location.pathname!==ROUTES[next]) history.pushState({},"",ROUTES[next]); window.scrollTo({top:0,behavior:"instant"}); };
   useEffect(()=>{ const onPop=()=>setView(pathToView()); addEventListener("popstate",onPop); return()=>removeEventListener("popstate",onPop); },[]);
   useEffect(()=>{
-    let cancelled=false;
-    async function loadData(){
+    let cancelled=false, hasLiveModels=false, benchmarksDone=false;
+    async function loadModels(){
       try {
-        const [modelResponse,benchmarkResponse]=await Promise.all([
-          fetch("/api/v1/models?status=preview&limit=100&include_summary=true"),
-          fetch("/api/v1/benchmarks?limit=100"),
-        ]);
-        if(!modelResponse.ok||!benchmarkResponse.ok) throw new Error("API unavailable");
-        const modelBody=await modelResponse.json(), benchmarkBody=await benchmarkResponse.json();
+        const response=await fetch("/api/v1/models?status=preview&limit=100&include_summary=true");
+        if(!response.ok) throw new Error("Model API unavailable");
+        const body=await response.json();
+        if(!cancelled){ hasLiveModels=true; setModels(body.items.map(mapApiModel)); setDataStatus("live"); }
+      } catch {
+        if(!cancelled&&!hasLiveModels){ setModels(DEMO_MODELS); setDataStatus("demo"); }
+      }
+    }
+    async function loadBenchmarks(){
+      if(benchmarksDone) return; // benchmark registry is near-static: fetch until success, then stop
+      try {
+        const benchmarkResponse=await fetch("/api/v1/benchmarks?limit=100");
+        if(!benchmarkResponse.ok) throw new Error("Benchmark API unavailable");
+        const benchmarkBody=await benchmarkResponse.json();
         const benchmarkDetails=await Promise.all(benchmarkBody.items.map(async item=>{
           const response=await fetch(`/api/v1/benchmarks/${item.slug}`);
           return response.ok?response.json():item;
         }));
-        if(!cancelled){ setModels(modelBody.items.map(mapApiModel)); setBenchmarks(benchmarkDetails.map(mapApiBenchmark)); setDataStatus("live"); }
+        if(!cancelled){ benchmarksDone=true; setBenchmarks(benchmarkDetails.map(mapApiBenchmark)); }
       } catch {
-        if(!cancelled){ setModels(DEMO_MODELS); setBenchmarks(DEMO_BENCHMARKS); setDataStatus("demo"); }
+        if(!cancelled) setBenchmarks(DEMO_BENCHMARKS);
       }
     }
-    loadData(); return()=>{cancelled=true;};
+    async function loadStatus(){
+      try {
+        const response=await fetch("/api/v1/status");
+        if(response.ok&&!cancelled) setSyncInfo(await response.json());
+      } catch { /* status is cosmetic: fail silently */ }
+    }
+    const loadData=()=>{ loadModels(); loadBenchmarks(); loadStatus(); };
+    loadData();
+    const retryTimer=setInterval(loadData,300000);
+    return()=>{cancelled=true; clearInterval(retryTimer);};
   },[]);
   const toggle=id=>setSelectedIds(now=>now.includes(id)?now.filter(x=>x!==id):now.length<5?[...now,id]:now);
   const globalSearch=e=>{ setQuery(e.target.value); if(view!=="models") navigate("models"); };
   const nav=[{id:"overview",label:"概览"},{id:"models",label:"模型"},{id:"compare",label:"对比"},{id:"benchmarks",label:"基准"}];
-  return <div className="app-shell"><header className="topbar"><button className="brand" onClick={()=>navigate("overview")}><PiCrosshair/><strong>Model Radar</strong><span>更清晰的模型世界</span></button><nav aria-label="主导航">{nav.map(item=><button key={item.id} className={view===item.id?"active":""} aria-current={view===item.id?"page":undefined} onClick={()=>navigate(item.id)}>{item.label}</button>)}</nav><label className="global-search"><PiMagnifyingGlass/><input value={query} onChange={globalSearch} placeholder="搜索模型、提供商或能力"/></label><span className={`demo-badge ${dataStatus==="live"?"live-data":""}`}>{dataStatus==="live"?"真实数据":dataStatus==="loading"?"同步中":"演示数据"}</span><span className="as-of">同步于 2026-09-21</span></header><main>
-    {view==="overview"&&<Overview navigate={navigate} models={models}/>} {view==="models"&&<ModelCatalog models={models} query={query} setQuery={setQuery} selected={selected} selectedIds={selectedIds} toggle={toggle} provider={provider} setProvider={setProvider} capability={capability} setCapability={setCapability} openWeight={openWeight} setOpenWeight={setOpenWeight} navigate={navigate}/>} {view==="compare"&&<CompareView selected={selected} navigate={navigate} toggle={toggle}/>} {view==="benchmarks"&&<Benchmarks benchmarks={benchmarks}/>}
+  return <div className="app-shell"><header className="topbar"><button className="brand" onClick={()=>navigate("overview")}><PiCrosshair/><strong>Model Radar</strong><span>更清晰的模型世界</span></button><nav aria-label="主导航">{nav.map(item=><button key={item.id} className={view===item.id?"active":""} aria-current={view===item.id?"page":undefined} onClick={()=>navigate(item.id)}>{item.label}</button>)}</nav><label className="global-search"><PiMagnifyingGlass/><input value={query} onChange={globalSearch} placeholder="搜索模型、提供商或能力"/></label><span className={`demo-badge ${dataStatus==="live"?"live-data":""}`}>{dataStatus==="live"?"真实数据":dataStatus==="loading"?"同步中":"演示数据"}</span><span className="as-of">同步于 {syncTimeLabel||"尚未同步"}</span></header><main>
+    {view==="overview"&&<Overview navigate={navigate} models={models} syncDateLabel={syncDateLabel}/>}
+    {view==="models"&&<ModelCatalog models={models} query={query} setQuery={setQuery} selected={selected} selectedIds={selectedIds} toggle={toggle} provider={provider} setProvider={setProvider} capability={capability} setCapability={setCapability} openWeight={openWeight} setOpenWeight={setOpenWeight} navigate={navigate} syncDateLabel={syncDateLabel} dataStatus={dataStatus}/>}
+    {view==="compare"&&<CompareView selected={selected} navigate={navigate} toggle={toggle} syncDateLabel={syncDateLabel}/>}
+    {view==="benchmarks"&&<Benchmarks benchmarks={benchmarks}/>}
   </main></div>;
 }

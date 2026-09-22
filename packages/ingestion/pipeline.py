@@ -291,6 +291,24 @@ def run_sync_pipeline(
             session.flush()
 
             upserted = replayed = skipped_benchmark = 0
+
+            # registry lookups are per-row N+1 against a remote DB — prefetch
+            # every tracked benchmark, its latest version, and that version's
+            # first metric into dicts (3 queries total for the whole run)
+            benchmark_by_slug = {
+                b.slug: b for b in session.scalars(select(Benchmark))
+            }
+            latest_version_by_benchmark: dict[str, BenchmarkVersion] = {}
+            for version in session.scalars(
+                select(BenchmarkVersion).order_by(BenchmarkVersion.created_at.desc())
+            ):
+                latest_version_by_benchmark.setdefault(version.benchmark_id, version)
+            first_metric_by_version: dict[str, BenchmarkMetric] = {}
+            for metric in session.scalars(select(BenchmarkMetric)):
+                first_metric_by_version.setdefault(
+                    metric.benchmark_version_id, metric
+                )
+
             for row, variant_id in matched:
                 try:
                     canonical = normalize_aa_evaluation(row, source_id=source_id)
@@ -298,26 +316,15 @@ def run_sync_pipeline(
                     skipped_benchmark += 1
                     continue
 
-                bench = session.scalar(
-                    select(Benchmark).where(Benchmark.slug == canonical["benchmark_slug"])
-                )
+                bench = benchmark_by_slug.get(canonical["benchmark_slug"])
                 if bench is None:
                     skipped_benchmark += 1
                     continue
-                version = session.scalar(
-                    select(BenchmarkVersion)
-                    .where(BenchmarkVersion.benchmark_id == bench.id)
-                    .order_by(BenchmarkVersion.created_at.desc())
-                    .limit(1)
-                )
+                version = latest_version_by_benchmark.get(bench.id)
                 if version is None:
                     skipped_benchmark += 1
                     continue
-                metric = session.scalar(
-                    select(BenchmarkMetric)
-                    .where(BenchmarkMetric.benchmark_version_id == version.id)
-                    .limit(1)
-                )
+                metric = first_metric_by_version.get(version.id)
                 if metric is None:
                     skipped_benchmark += 1
                     continue

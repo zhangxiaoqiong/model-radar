@@ -132,7 +132,7 @@ class Evaluation(UUIDMixin, Base):
     )
 
     supersedes_evaluation_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("evaluation.id")
+        String(36), ForeignKey("evaluation.id"), index=True
     )
 
     # Material result fields above remain immutable. These fields only record
