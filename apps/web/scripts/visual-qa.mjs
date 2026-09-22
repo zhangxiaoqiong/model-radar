@@ -12,7 +12,7 @@ page.on("console", message => { if (message.type() === "error") consoleErrors.pu
 page.on("pageerror", error => consoleErrors.push(error.message));
 
 await page.goto("http://127.0.0.1:4173/", { waitUntil: "networkidle" });
-await page.getByText("真实数据", { exact: true }).waitFor();
+await page.getByText("来源数据", { exact: true }).waitFor();
 await page.getByRole("heading", { name: "最新模型雷达" }).waitFor();
 await page.screenshot({ path: fileURLToPath(new URL("overview.png", outputDir)), fullPage: true });
 
@@ -32,11 +32,11 @@ await search.fill("no-such-model");
 await page.getByText("没有符合当前筛选条件的模型").waitFor();
 await search.fill("");
 
-await page.getByRole("button", { name: "选择 GPT-5.2", exact: true }).click();
+await rows.nth(0).locator(".checkbox").click();
 await page.getByText("已选 1 个，再选 1 个即可对比").waitFor();
-await page.getByRole("button", { name: "选择 Gemini 2.5 Pro", exact: true }).click();
+await rows.nth(1).locator(".checkbox").click();
 await page.getByText("已选 2 个模型").waitFor();
-await page.screenshot({ path: fileURLToPath(new URL("catalog.png", outputDir)), fullPage: true });
+await page.screenshot({ path: fileURLToPath(new URL("catalog.png", outputDir)) });
 await page.getByRole("button", { name: /开始对比/ }).click();
 await page.getByRole("heading", { name: "模型对比" }).waitFor();
 if (await page.locator(".compare-head").count() !== 2) throw new Error("Expected two selected models in comparison");
@@ -50,11 +50,11 @@ await page.screenshot({ path: fileURLToPath(new URL("benchmarks.png", outputDir)
 
 const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
 await mobile.goto("http://127.0.0.1:4173/models", { waitUntil: "networkidle" });
-await mobile.getByRole("button", { name: "选择 GPT-5.2", exact: true }).click();
+await mobile.locator("tbody tr").first().locator(".checkbox").click();
 await mobile.getByText("已选 1 个，再选 1 个即可对比").waitFor();
 const mobileWidth = await mobile.evaluate(() => ({ viewport: window.innerWidth, page: document.documentElement.scrollWidth }));
 if (mobileWidth.page > mobileWidth.viewport) throw new Error(`Mobile page overflows: ${mobileWidth.page}px > ${mobileWidth.viewport}px`);
-await mobile.screenshot({ path: fileURLToPath(new URL("mobile.png", outputDir)), fullPage: true });
+await mobile.screenshot({ path: fileURLToPath(new URL("mobile.png", outputDir)) });
 
 await browser.close();
 if (consoleErrors.length) throw new Error(`Browser console errors: ${consoleErrors.join(" | ")}`);

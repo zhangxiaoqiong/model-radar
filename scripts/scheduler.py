@@ -23,6 +23,7 @@ from ingestion.pipeline import (  # noqa: E402
     recover_stale_runs,
     run_sync_pipeline,
 )
+from ingestion.catalog_discovery import discover_aa_models, recent_aa_models  # noqa: E402
 from run_sync import fetch_aa_rows  # noqa: E402  (same directory)
 
 
@@ -50,16 +51,18 @@ def sync_once() -> None:
             .order_by(PipelineRun.created_at.asc())
             .limit(1)
         )
+        models = client.fetch_models()
+        discovery = discover_aa_models(session, source_id=source.id, models=models)
         run = run_sync_pipeline(
             session,
             source_id=source.id,
-            fetch_fn=lambda: fetch_aa_rows(client),
+            fetch_fn=lambda: fetch_aa_rows(client, recent_aa_models(models)),
             pipeline_type=pending.pipeline_type if pending else "daily_sync",
             trigger=pending.trigger if pending else "schedule",
             existing_run=pending,
         )
         session.commit()
-        print(f"sync run {run.id}: {run.status}")
+        print(f"sync run {run.id}: {run.status}; catalog: {discovery}")
     except PipelineBusyError as exc:
         session.rollback()
         print(f"sync skipped: {exc}")

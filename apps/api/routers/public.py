@@ -123,6 +123,7 @@ def list_models(
         select(
             ModelRelease,
             Provider.slug.label("provider_slug"),
+            Provider.name.label("provider_name"),
             ModelFamily.slug.label("family_slug"),
         )
         .join(ModelFamily, ModelRelease.family_id == ModelFamily.id)
@@ -147,15 +148,15 @@ def list_models(
         next_cursor = rows[-1][0].id
     items = [
         {**row_dict(release, RELEASE_COLUMNS),
-         "provider": provider_slug, "family": family_slug}
-        for release, provider_slug, family_slug in rows
+         "provider": provider_slug, "provider_name": provider_name, "family": family_slug}
+        for release, provider_slug, provider_name, family_slug in rows
     ]
     result = {"items": items, "next_cursor": next_cursor}
     if not include_summary or not rows:
         return result
 
     # summary: 3 more queries total (variants, endpoints, current evaluations)
-    variant_ids = [release.default_variant_id for release, _, _ in rows
+    variant_ids = [release.default_variant_id for release, _, _, _ in rows
                    if release.default_variant_id]
     variants_by_id = {
         v.id: v

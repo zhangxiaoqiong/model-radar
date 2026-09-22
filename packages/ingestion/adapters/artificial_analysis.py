@@ -126,15 +126,20 @@ class AAClient:
             page += 1
         return models
 
-    def fetch_evaluations(self) -> list[dict[str, Any]]:
+    def fetch_evaluations(self, models: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         """Flatten model-level nested evaluation objects into warehouse rows."""
         rows: list[dict[str, Any]] = []
-        for model in self.fetch_models():
+        for model in models if models is not None else self.fetch_models():
             evaluations = model.get("evaluations") or {}
             if not isinstance(evaluations, dict):
                 continue
             model_id = str(model.get("id") or model.get("slug") or model.get("name"))
             creator = model.get("model_creator") or {}
+            creator_name = str(creator.get("name") or "").strip()
+            provider_slug = "".join(
+                char if char.isalnum() and char.isascii() else "-"
+                for char in creator_name.lower()
+            ).strip("-")
             for metric_slug, value in evaluations.items():
                 if value is None or isinstance(value, (dict, list)):
                     continue
@@ -143,7 +148,7 @@ class AAClient:
                         "id": f"{model_id}:{metric_slug}",
                         "model_id": model.get("id"),
                         "model_name": model.get("slug") or model.get("name"),
-                        "provider_slug": creator.get("slug"),
+                        "provider_slug": creator.get("slug") or provider_slug,
                         "index_name": metric_slug,
                         "value": value,
                     }

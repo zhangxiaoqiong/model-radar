@@ -239,3 +239,44 @@ def test_recover_stale_pipeline_run(session):
         "fetch_snapshot": "failed",
         "entity_resolution": "skipped",
     }
+
+
+def test_discovery_adds_recent_models_idempotently(session, registry, tmp_path, monkeypatch):
+    from datetime import date
+    from backend_core.domain import ModelAlias, ModelRelease
+    from ingestion.catalog_discovery import discover_aa_models
+
+    monkeypatch.setattr("ingestion.snapshot_store.raw_dir", lambda: tmp_path)
+    models = [
+        {
+            "id": "new-1", "name": "Fresh Model (high)", "slug": "fresh-model",
+            "release_date": "2026-09-01",
+            "model_creator": {"name": "New Vendor"},
+            "evaluations": {"artificial_analysis_intelligence_index": 42},
+        },
+        {
+            "id": "old-1", "name": "Old Model", "slug": "old-model",
+            "release_date": "2025-09-01",
+            "model_creator": {"name": "New Vendor"},
+        },
+    ]
+    first = discover_aa_models(
+        session, source_id=registry["source_id"], models=models, today=date(2026, 9, 22)
+    )
+    session.commit()
+    second = discover_aa_models(
+        session, source_id=registry["source_id"], models=models, today=date(2026, 9, 22)
+    )
+    session.commit()
+
+    assert first == {"recent": 1, "created": 1, "updated": 0}
+    assert second == {"recent": 1, "created": 0, "updated": 1}
+    release = session.scalar(select(ModelRelease).where(ModelRelease.canonical_name == "Fresh Model (high)"))
+    assert release is not None
+    assert release.release_date == date(2026, 9, 1)
+    assert release.source_id == registry["source_id"]
+    assert release.source_snapshot_id is not None
+    assert release.default_variant_id is not None
+    alias = session.scalar(select(ModelAlias).where(ModelAlias.alias == "fresh-model"))
+    assert alias.model_variant_id == release.default_variant_id
+    assert session.scalar(select(ModelRelease).where(ModelRelease.canonical_name == "Old Model")) is None

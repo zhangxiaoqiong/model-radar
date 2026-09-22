@@ -16,7 +16,7 @@ packages/ingestion      # AA adapter, normalizers, entity resolution, sync pipel
 apps/api                # FastAPI app (public read + admin ops)
 apps/web                # React/Vite product UI (model catalog + compare)
 scripts/                # seed, migrations runner, sync, scheduler
-data/seeds/             # tracked_models / tracked_benchmarks / capabilities (YAML)
+data/seeds/             # baseline registry / benchmarks / capabilities (YAML)
 data/raw/               # raw source snapshots (never committed)
 tests/                  # unit + DB integration tests (model_radar_test)
 ```
@@ -39,7 +39,7 @@ free tier. The adapter uses `https://artificialanalysis.ai/api/v2` by default.
 # 1. migrations (baseline schema)
 python -m alembic upgrade head
 
-# 2. seed registry (idempotent)
+# 2. seed baseline registry and benchmark definitions (idempotent)
 python scripts/seed.py
 
 # 3. run tests (uses model_radar_test)
@@ -49,7 +49,7 @@ $env:DB_NAME="model_radar_test"; python -m pytest
 # 4. start API
 python -m uvicorn api.main:app --port 8000
 
-# 5. sync data
+# 5. discover recent models from AA and sync their evaluations
 python scripts/run_sync.py --dry-run   # peek at what AA returns
 python scripts/run_sync.py             # full pipeline
 python scripts/scheduler.py            # or scheduled daily sync
@@ -64,9 +64,13 @@ npm run dev -- --port 4173
 ```
 
 Open `http://localhost:4173/`. In local development Vite proxies `/api` to the
-FastAPI service on port 8000. The UI loads the MySQL-backed registry and the
-latest Artificial Analysis snapshot; if the API is unavailable it falls back
-to clearly labelled demo data.
+FastAPI service on port 8000. The UI shows releases dated within the last
+90 days from the live Artificial Analysis model feed, not the baseline model
+seed. The sync stores source snapshots and reuses source aliases, so repeated
+runs are idempotent. AA is an independent aggregator rather than an official
+vendor announcement: discovered release dates are marked medium confidence.
+Unprovided capabilities and API endpoints are left unknown. If the API is
+unavailable, the UI shows an error instead of fabricated demo data.
 
 ## API surface (V1a)
 

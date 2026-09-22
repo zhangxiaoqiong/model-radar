@@ -22,10 +22,11 @@ from ingestion.adapters.artificial_analysis import (  # noqa: E402
     AARateLimitedError,
 )
 from ingestion.pipeline import run_sync_pipeline  # noqa: E402
+from ingestion.catalog_discovery import discover_aa_models, recent_aa_models  # noqa: E402
 
 
-def fetch_aa_rows(client: AAClient) -> list[dict]:
-    rows = client.fetch_evaluations()
+def fetch_aa_rows(client: AAClient, models: list[dict] | None = None) -> list[dict]:
+    rows = client.fetch_evaluations(models)
     if isinstance(rows, dict):
         rows = rows.get("data", [])
     return rows
@@ -43,11 +44,12 @@ def main() -> int:
 
     if args.dry_run:
         try:
-            rows = fetch_aa_rows(client)
+            models = recent_aa_models(client.fetch_models())
+            rows = fetch_aa_rows(client, models)
         except (AARateLimitedError, AAPermissionError) as exc:
             print(str(exc))
             return 1
-        print(f"fetched {len(rows)} rows from {args.source}")
+        print(f"fetched {len(models)} recent models and {len(rows)} scores from {args.source}")
         for row in rows[:10]:
             print(" ", {k: row.get(k) for k in ("model_name", "index_name", "value")})
         return 0
@@ -65,12 +67,15 @@ def main() -> int:
             print(f"source '{args.source}' not found — run scripts/seed.py first")
             return 1
 
+        models = client.fetch_models()
+        discovery = discover_aa_models(session, source_id=source.id, models=models)
         run = run_sync_pipeline(
             session,
             source_id=source.id,
-            fetch_fn=lambda: fetch_aa_rows(client),
+            fetch_fn=lambda: fetch_aa_rows(client, recent_aa_models(models)),
         )
         session.commit()
+        print(f"catalog: {discovery}")
         print(f"pipeline run {run.id}: {run.status}")
         for stage in run.stages if hasattr(run, "stages") else []:
             print(f"  {stage.stage_name}: {stage.status} {stage.detail or ''}")
