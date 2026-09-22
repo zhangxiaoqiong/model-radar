@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   PiArrowLeft, PiArrowRight,
   PiCaretDown, PiCaretRight, PiChartLineUp, PiCheck,
@@ -35,7 +35,7 @@ const COMPARE_BENCHMARKS = Object.values(SCORE_LABELS);
 
 function compactTokens(value) {
   if (!value) return "—";
-  if (value >= 1_000_000) return `${value / 1_000_000}M`;
+  if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(2))}M`;
   if (value >= 1_000) return `${Math.round(value / 1_000)}K`;
   return String(value);
 }
@@ -48,13 +48,24 @@ function mapApiModel(item) {
   evaluations.forEach(e=>{ if(SCORE_LABELS[e.benchmark_slug]) scores[SCORE_LABELS[e.benchmark_slug]]=Number(e.score); });
   const headline=evaluations.find(e=>e.benchmark_slug==="artificial_analysis_intelligence_index")||evaluations[0];
   const variant=item.variant||{};
+  const capabilitySource=item.capability_source;
+  const capabilities=capabilitySource?[
+    variant.supports_text&&"文本", variant.supports_image&&"图片",
+    variant.supports_audio&&"音频", variant.supports_video&&"视频",
+    variant.supports_reasoning&&"推理", variant.supports_tool_calling&&"工具调用",
+  ].filter(Boolean):[];
+  const price=item.pricing||{}, performance=item.performance||{};
   return {
     id:item.slug, name:item.canonical_name, provider:item.provider_name||PROVIDER_NAMES[item.provider]||item.provider,
     release:item.release_date||"—", context:compactTokens(variant.context_window),
-    reasoning:variant.supports_reasoning?5:null, vision:variant.supports_image?4:null, tools:variant.supports_tool_calling?4:null,
+    contextTokens:variant.context_window||null, capabilities, capabilitySource,
+    inputPrice:price.input_price_per_million==null?null:Number(price.input_price_per_million),
+    outputPrice:price.output_price_per_million==null?null:Number(price.output_price_per_million),
+    speed:performance.tokens_per_second==null?null:Number(performance.tokens_per_second),
+    description:item.description||null,
     eval:headline?Number(headline.score):null, benchmark:headline?(SCORE_LABELS[headline.benchmark_slug]||headline.benchmark_name):"待评测",
     source:headline?.source||"Registry", variants:[variant.name||"standard"],
-    endpoint:item.endpoint?.external_model_id||"暂无端点", openWeight:Boolean(item.open_weight), score:scores,
+    endpoint:item.endpoint?.external_model_id||"暂无端点", score:scores,
     snapshotId:headline?.source_snapshot_id, observedAt:headline?.observed_at, live:true,
   };
 }
@@ -105,6 +116,60 @@ function ModelCatalog({ models, query, setQuery, selected, selectedIds, toggle, 
       {models.length===0&&<div className="empty" role="status">{dataStatus==="loading"?"正在加载真实模型数据…":dataStatus==="error"?"数据源连接失败，稍后自动重试。":"最近 90 天暂无已发现的模型。"}</div>}
       <div className="table-wrap"><table><thead><tr><th/><th>Model</th><th>Provider</th><th>Release</th><th>Context</th><th>Reasoning</th><th>Vision</th><th>Tool Use</th><th>Latest Eval</th><th>Status</th></tr></thead><tbody>{filtered.map(m=>{const checked=selectedIds.includes(m.id);return <tr key={m.id} className={checked?"selected":""}><td><button className={`checkbox ${checked?"checked":""}`} onClick={()=>toggle(m.id)} aria-label={`${checked?"取消选择":"选择"} ${m.name}`}>{checked&&<PiCheck/>}</button></td><td><div className="model-name"><strong>{m.name}</strong><span>{m.variants.length} variants</span><small>{m.variants.join(" · ")}</small></div></td><td><div className="provider"><ModelMark model={m}/><span>{m.provider}</span></div></td><td>{m.release}</td><td><b>{m.context}</b><small>tokens</small></td><td><Rating value={m.reasoning} label="Reasoning"/></td><td><Rating value={m.vision} label="Vision"/></td><td><Rating value={m.tools} label="Tool use"/></td><td><div className="eval"><b>{m.eval??"—"}</b><span>{m.benchmark}</span><small>{m.source}</small></div></td><td><div className="status"><i/>{m.live?"已同步":"演示"}<small>{m.endpoint}</small></div></td></tr>})}</tbody></table>{filtered.length===0&&<div className="empty">没有符合当前筛选条件的模型</div>}</div>
       <footer className="table-footer"><span>显示 {filtered.length} 个模型 · 近三个月跟踪范围</span><span><PiInfo/> 来源：<a href="https://artificialanalysis.ai/data-api/docs" target="_blank" rel="noreferrer">Artificial Analysis</a> · 本次同步 {syncDateLabel||"尚未同步"}</span></footer></div>
+  </section>;
+}
+
+const CATALOG_PAGE_SIZE = 20;
+const CAPABILITY_OPTIONS = ["文本", "图片", "音频", "视频", "推理", "工具调用"];
+const SORT_OPTIONS = [
+  ["release", "最新发布"], ["intelligence", "智能评估最高"],
+  ["coding", "编程评估最高"], ["agentic", "智能体评估最高"],
+  ["price", "输入价格最低"], ["context", "上下文最大"], ["speed", "输出速度最快"],
+];
+function priceLabel(value) { return value == null ? "—" : `$${value.toFixed(value < 1 ? 3 : 2)}`; }
+function rankHighlight(model, models) {
+  const topQuartile = (value, accessor, ascending = false) => {
+    if (value == null) return false;
+    const values = models.map(accessor).filter(Number.isFinite).sort((a,b)=>ascending?a-b:b-a);
+    return values.length >= 8 && value >= 0 && (ascending ? value <= values[Math.ceil(values.length / 4)-1] : value >= values[Math.ceil(values.length / 4)-1]);
+  };
+  if (topQuartile(model.score["AA Intelligence"], m=>m.score["AA Intelligence"])) return "智能评估前 25%";
+  if (topQuartile(model.score["AA Coding"], m=>m.score["AA Coding"])) return "编程评估前 25%";
+  if (topQuartile(model.inputPrice, m=>m.inputPrice, true)) return "输入价格较低";
+  if (topQuartile(model.speed, m=>m.speed)) return "输出速度较快";
+  return null;
+}
+function ModelCatalogV2({ models, query, setQuery, selected, selectedIds, toggle, provider, setProvider, capability, setCapability, navigate, syncDateLabel, dataStatus }) {
+  const [sort, setSort] = useState("release"), [page, setPage] = useState(1), [expanded, setExpanded] = useState(null);
+  const providers = useMemo(()=>[...new Set(models.map(m=>m.provider))].sort(), [models]);
+  const filtered = useMemo(()=>models.filter(m=>
+    `${m.name} ${m.provider} ${m.description||""}`.toLowerCase().includes(query.toLowerCase()) &&
+    (provider === "all" || m.provider === provider) &&
+    (capability === "all" || m.capabilities.includes(capability))
+  ).sort((a,b)=>{
+    if (sort === "release") return b.release.localeCompare(a.release);
+    const field = sort === "intelligence" ? m=>m.score["AA Intelligence"] :
+      sort === "coding" ? m=>m.score["AA Coding"] :
+      sort === "agentic" ? m=>m.score["AA Agentic"] :
+      sort === "price" ? m=>m.inputPrice :
+      sort === "context" ? m=>m.contextTokens : m=>m.speed;
+    const av=field(a), bv=field(b);
+    if (av == null) return bv == null ? b.release.localeCompare(a.release) : 1;
+    if (bv == null) return -1;
+    return (sort === "price" ? av-bv : bv-av) || b.release.localeCompare(a.release);
+  }), [models, query, provider, capability, sort]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / CATALOG_PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const visible = filtered.slice((currentPage-1)*CATALOG_PAGE_SIZE, currentPage*CATALOG_PAGE_SIZE);
+  const updateQuery = value => { setQuery(value); setPage(1); };
+  const updateProvider = value => { setProvider(value); setPage(1); };
+  const updateCapability = value => { setCapability(value); setPage(1); };
+  return <section className="catalog page"><PageHero eyebrow="MODEL INTELLIGENCE · 近 3 个月" title="模型图谱" description="近期模型来自 Artificial Analysis；能力与上下文由 OpenRouter 严格匹配补充。价格与评估均保留来源，缺失数据不推断。" aside={<><strong>{models.length} 个近期模型</strong><span>按评估、价格或上下文排序</span></>}/>
+    <div className="catalog-surface"><div className="filters catalog-filters"><label className="model-search"><PiMagnifyingGlass/><input value={query} onChange={e=>updateQuery(e.target.value)} placeholder="搜索模型、提供商或特点…"/></label><Filter label="提供商" value={provider} onChange={updateProvider} options={providers}/><Filter label="能力" value={capability} onChange={updateCapability} options={CAPABILITY_OPTIONS}/><label className="filter"><span>排序</span><select aria-label="排序" value={sort} onChange={e=>{setSort(e.target.value);setPage(1);}}>{SORT_OPTIONS.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select><PiCaretDown/></label></div>
+    <SelectionDock selected={selected} toggle={toggle} navigate={navigate}/>
+    {models.length===0&&<div className="empty" role="status">{dataStatus==="loading"?"正在加载真实模型数据…":dataStatus==="error"?"数据源连接失败，稍后自动重试。":"最近 90 天暂无已发现的模型。"}</div>}
+    <div className="table-wrap"><table className="catalog-table"><thead><tr><th/><th>模型 / 能力</th><th>提供商</th><th>发布日期</th><th>上下文</th><th>价格 / 百万 tokens</th><th>AA 评估</th><th>数据亮点</th><th>详情</th></tr></thead><tbody>{visible.map(m=>{const checked=selectedIds.includes(m.id), highlight=rankHighlight(m,models), isOpen=expanded===m.id;return <Fragment key={m.id}><tr className={checked?"selected":""}><td><button className={`checkbox ${checked?"checked":""}`} onClick={()=>toggle(m.id)} aria-label={`${checked?"取消选择":"选择"} ${m.name}`}>{checked&&<PiCheck/>}</button></td><td><div className="catalog-model"><strong>{m.name}</strong><div className="capability-tags">{m.capabilities.length?m.capabilities.map(tag=><span key={tag}>{tag}</span>):<small>能力待补充</small>}</div></div></td><td><div className="provider"><ModelMark model={m}/><span>{m.provider}</span></div></td><td>{m.release}</td><td><b>{m.context}</b></td><td><div className="catalog-price"><b>{priceLabel(m.inputPrice)} / {priceLabel(m.outputPrice)}</b><small>输入 / 输出 · AA 参考价</small></div></td><td><div className="catalog-scores"><b>{m.score["AA Intelligence"] ?? "—"}</b><small>智能 · 编程 {m.score["AA Coding"] ?? "—"} · 智能体 {m.score["AA Agentic"] ?? "—"}</small></div></td><td>{highlight?<span className="highlight-chip">{highlight}</span>:<span className="muted">—</span>}</td><td><button className="detail-button" onClick={()=>setExpanded(isOpen?null:m.id)} aria-expanded={isOpen} aria-label={`${isOpen?"收起":"查看"} ${m.name} 详情`}>{isOpen?"收起":"详情"} <PiCaretDown/></button></td></tr>{isOpen&&<tr className="catalog-detail-row"><td colSpan="9"><div className="catalog-detail"><p>{m.description||"暂无来源简介。"}</p><dl><div><dt>能力 / 上下文</dt><dd>{m.capabilitySource||"待补充"}</dd></div><div><dt>价格、性能与评估</dt><dd>Artificial Analysis · 输入 {priceLabel(m.inputPrice)} / 输出 {priceLabel(m.outputPrice)} · {m.speed==null?"速度待补充":`${Math.round(m.speed)} tokens/s`}</dd></div><div><dt>评估得分</dt><dd>智能 {m.score["AA Intelligence"]??"—"} · 编程 {m.score["AA Coding"]??"—"} · 智能体 {m.score["AA Agentic"]??"—"}</dd></div></dl>{m.description&&<small>简介来源：OpenRouter；亮点仅代表近三个月模型的数据相对位置。</small>}</div></td></tr>}</Fragment>})}</tbody></table>{models.length>0&&filtered.length===0&&<div className="empty">没有符合当前筛选条件的模型</div>}</div>
+    <footer className="table-footer catalog-footer"><span>显示 {filtered.length?`${(currentPage-1)*CATALOG_PAGE_SIZE+1}–${Math.min(currentPage*CATALOG_PAGE_SIZE,filtered.length)}`:"0"} / {filtered.length} 个模型 · 近三个月</span><div className="catalog-pagination"><button disabled={currentPage===1} onClick={()=>setPage(currentPage-1)}>上一页</button><span>第 {currentPage} / {pageCount} 页</span><button disabled={currentPage===pageCount} onClick={()=>setPage(currentPage+1)}>下一页</button></div><span><PiInfo/> <a href="https://artificialanalysis.ai/data-api/docs" target="_blank" rel="noreferrer">AA</a> · <a href="https://openrouter.ai/docs/api/api-reference/models/get-models" target="_blank" rel="noreferrer">OpenRouter</a> · 同步 {syncDateLabel||"待同步"}</span></footer></div>
   </section>;
 }
 
@@ -187,7 +252,7 @@ export function App() {
   const nav=[{id:"overview",label:"概览"},{id:"models",label:"模型"},{id:"compare",label:"对比"},{id:"benchmarks",label:"基准"}];
   return <div className="app-shell"><header className="topbar"><button className="brand" onClick={()=>navigate("overview")}><PiCrosshair/><strong>Model Radar</strong><span>更清晰的模型世界</span></button><nav aria-label="主导航">{nav.map(item=><button key={item.id} className={view===item.id?"active":""} aria-current={view===item.id?"page":undefined} onClick={()=>navigate(item.id)}>{item.label}</button>)}</nav><label className="global-search"><PiMagnifyingGlass/><input value={query} onChange={globalSearch} placeholder="搜索模型、提供商或能力"/></label><span className={`demo-badge ${dataStatus==="live"?"live-data":""}`}>{dataStatus==="live"?"来源数据":dataStatus==="loading"?"加载中":"连接失败"}</span><span className="as-of">同步于 {syncTimeLabel||"尚未同步"}</span></header><main>
     {view==="overview"&&<Overview navigate={navigate} models={models} syncDateLabel={syncDateLabel}/>}
-    {view==="models"&&<ModelCatalog models={models} query={query} setQuery={setQuery} selected={selected} selectedIds={selectedIds} toggle={toggle} provider={provider} setProvider={setProvider} capability={capability} setCapability={setCapability} openWeight={openWeight} setOpenWeight={setOpenWeight} navigate={navigate} syncDateLabel={syncDateLabel} dataStatus={dataStatus}/>}
+    {view==="models"&&<ModelCatalogV2 models={models} query={query} setQuery={setQuery} selected={selected} selectedIds={selectedIds} toggle={toggle} provider={provider} setProvider={setProvider} capability={capability} setCapability={setCapability} navigate={navigate} syncDateLabel={syncDateLabel} dataStatus={dataStatus}/>}
     {view==="compare"&&<CompareView selected={selected} navigate={navigate} toggle={toggle} syncDateLabel={syncDateLabel}/>}
     {view==="benchmarks"&&<Benchmarks benchmarks={benchmarks}/>}
   </main></div>;

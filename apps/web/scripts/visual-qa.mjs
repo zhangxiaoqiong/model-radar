@@ -22,11 +22,26 @@ if (new URL(page.url()).pathname !== "/models") throw new Error("Models route di
 const rows = page.locator("tbody tr");
 const totalRows = await rows.count();
 if (totalRows < 6) throw new Error(`Expected at least six synced model rows, got ${totalRows}`);
-const providerFilter = page.locator(".filter").filter({ hasText: "Provider" }).locator("select");
+if (totalRows > 20) throw new Error(`Pagination failed: ${totalRows} rows on one page`);
+if (await page.getByRole("button", { name: "下一页" }).isEnabled()) {
+  await page.getByRole("button", { name: "下一页" }).click();
+  if (await rows.count() < 1) throw new Error("Next page is empty");
+  await page.getByRole("button", { name: "上一页" }).click();
+}
+const providerFilter = page.locator(".filter").filter({ hasText: "提供商" }).locator("select");
 await providerFilter.selectOption("Anthropic");
 const providerRows = await rows.count();
 if (providerRows < 1 || providerRows >= totalRows) throw new Error("Provider filter did not narrow the table");
 await providerFilter.selectOption("all");
+const capabilityFilter = page.locator(".filter").filter({ hasText: "能力" }).locator("select");
+await capabilityFilter.selectOption("图片");
+if (await rows.count() < 1 || !await rows.first().locator(".capability-tags").getByText("图片").count()) throw new Error("Capability filter failed");
+await capabilityFilter.selectOption("all");
+await page.getByLabel("排序").selectOption("intelligence");
+const firstScore = Number(await rows.first().locator(".catalog-scores b").innerText());
+const secondScore = Number(await rows.nth(1).locator(".catalog-scores b").innerText());
+if (firstScore < secondScore) throw new Error("Intelligence sort failed");
+await page.getByLabel("排序").selectOption("release");
 const search = page.locator(".model-search input");
 await search.fill("no-such-model");
 await page.getByText("没有符合当前筛选条件的模型").waitFor();

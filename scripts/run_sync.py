@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -22,7 +23,10 @@ from ingestion.adapters.artificial_analysis import (  # noqa: E402
     AARateLimitedError,
 )
 from ingestion.pipeline import run_sync_pipeline  # noqa: E402
-from ingestion.catalog_discovery import discover_aa_models, recent_aa_models  # noqa: E402
+from ingestion.adapters.openrouter import fetch_openrouter_models  # noqa: E402
+from ingestion.catalog_discovery import (  # noqa: E402
+    discover_aa_models, enrich_openrouter_models, recent_aa_models,
+)
 
 
 def fetch_aa_rows(client: AAClient, models: list[dict] | None = None) -> list[dict]:
@@ -69,13 +73,23 @@ def main() -> int:
 
         models = client.fetch_models()
         discovery = discover_aa_models(session, source_id=source.id, models=models)
+        try:
+            router_models = fetch_openrouter_models()
+        except (httpx.HTTPError, ValueError) as exc:
+            print(f"OpenRouter enrichment unavailable: {type(exc).__name__}")
+            enrichment = {"matched": 0}
+        else:
+            enrichment = enrich_openrouter_models(
+                session, aa_source_id=source.id, aa_models=models,
+                openrouter_models=router_models,
+            )
         run = run_sync_pipeline(
             session,
             source_id=source.id,
             fetch_fn=lambda: fetch_aa_rows(client, recent_aa_models(models)),
         )
         session.commit()
-        print(f"catalog: {discovery}")
+        print(f"catalog: {discovery}; OpenRouter: {enrichment}")
         print(f"pipeline run {run.id}: {run.status}")
         for stage in run.stages if hasattr(run, "stages") else []:
             print(f"  {stage.stage_name}: {stage.status} {stage.detail or ''}")

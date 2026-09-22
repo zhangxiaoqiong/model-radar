@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -18,12 +19,15 @@ from apscheduler.schedulers.blocking import BlockingScheduler  # noqa: E402
 from backend_core.config import get_settings  # noqa: E402
 from backend_core.db import create_db_engine, make_session_factory  # noqa: E402
 from ingestion.adapters.artificial_analysis import AAClient  # noqa: E402
+from ingestion.adapters.openrouter import fetch_openrouter_models  # noqa: E402
 from ingestion.pipeline import (  # noqa: E402
     PipelineBusyError,
     recover_stale_runs,
     run_sync_pipeline,
 )
-from ingestion.catalog_discovery import discover_aa_models, recent_aa_models  # noqa: E402
+from ingestion.catalog_discovery import (  # noqa: E402
+    discover_aa_models, enrich_openrouter_models, recent_aa_models,
+)
 from run_sync import fetch_aa_rows  # noqa: E402  (same directory)
 
 
@@ -53,6 +57,16 @@ def sync_once() -> None:
         )
         models = client.fetch_models()
         discovery = discover_aa_models(session, source_id=source.id, models=models)
+        try:
+            router_models = fetch_openrouter_models()
+        except (httpx.HTTPError, ValueError) as exc:
+            print(f"OpenRouter enrichment unavailable: {type(exc).__name__}")
+            enrichment = {"matched": 0}
+        else:
+            enrichment = enrich_openrouter_models(
+                session, aa_source_id=source.id, aa_models=models,
+                openrouter_models=router_models,
+            )
         run = run_sync_pipeline(
             session,
             source_id=source.id,
@@ -62,7 +76,7 @@ def sync_once() -> None:
             existing_run=pending,
         )
         session.commit()
-        print(f"sync run {run.id}: {run.status}; catalog: {discovery}")
+        print(f"sync run {run.id}: {run.status}; catalog: {discovery}; OpenRouter: {enrichment}")
     except PipelineBusyError as exc:
         session.rollback()
         print(f"sync skipped: {exc}")

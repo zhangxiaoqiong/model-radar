@@ -20,6 +20,8 @@ from backend_core.domain import (
     Evaluation,
     ModelEndpoint,
     ModelFamily,
+    ModelPerformance,
+    ModelPricing,
     ModelRelease,
     ModelVariant,
     PipelineRun,
@@ -35,12 +37,13 @@ router = APIRouter()
 
 RELEASE_COLUMNS = [
     "id", "slug", "canonical_name", "release_date", "knowledge_cutoff",
-    "open_weight", "license", "status", "default_variant_id",
+    "open_weight", "license", "status", "default_variant_id", "source_id",
 ]
 VARIANT_COLUMNS = [
     "id", "name", "variant_type", "reasoning_level", "context_window",
-    "max_output_tokens", "supports_image", "supports_audio", "supports_video",
-    "supports_reasoning", "supports_tool_calling", "supports_structured_output",
+    "max_output_tokens", "supports_text", "supports_image", "supports_audio",
+    "supports_video", "supports_reasoning", "supports_tool_calling",
+    "supports_structured_output", "source_id",
 ]
 ENDPOINT_COLUMNS = [
     "id", "external_model_id", "endpoint_type", "api_base_url",
@@ -125,6 +128,7 @@ def list_models(
             Provider.slug.label("provider_slug"),
             Provider.name.label("provider_name"),
             ModelFamily.slug.label("family_slug"),
+            ModelFamily.description.label("description"),
         )
         .join(ModelFamily, ModelRelease.family_id == ModelFamily.id)
         .join(Provider, ModelFamily.provider_id == Provider.id)
@@ -148,15 +152,16 @@ def list_models(
         next_cursor = rows[-1][0].id
     items = [
         {**row_dict(release, RELEASE_COLUMNS),
-         "provider": provider_slug, "provider_name": provider_name, "family": family_slug}
-        for release, provider_slug, provider_name, family_slug in rows
+         "provider": provider_slug, "provider_name": provider_name,
+         "family": family_slug, "description": description}
+        for release, provider_slug, provider_name, family_slug, description in rows
     ]
     result = {"items": items, "next_cursor": next_cursor}
     if not include_summary or not rows:
         return result
 
-    # summary: 3 more queries total (variants, endpoints, current evaluations)
-    variant_ids = [release.default_variant_id for release, _, _, _ in rows
+    # Summary uses bounded batch queries, independent of page size.
+    variant_ids = [release.default_variant_id for release, _, _, _, _ in rows
                    if release.default_variant_id]
     variants_by_id = {
         v.id: v
@@ -164,6 +169,24 @@ def list_models(
             select(ModelVariant).where(ModelVariant.id.in_(variant_ids))
         )
     } if variant_ids else {}
+    source_ids = {v.source_id for v in variants_by_id.values() if v.source_id}
+    source_names = {
+        source.id: source.name
+        for source in session.scalars(select(Source).where(Source.id.in_(source_ids)))
+    } if source_ids else {}
+    pricing_by_variant = {}
+    performance_by_variant = {}
+    if variant_ids:
+        for price in session.scalars(
+            select(ModelPricing).where(ModelPricing.model_variant_id.in_(variant_ids))
+            .order_by(ModelPricing.observed_at.desc())
+        ):
+            pricing_by_variant.setdefault(price.model_variant_id, price)
+        for performance in session.scalars(
+            select(ModelPerformance).where(ModelPerformance.model_variant_id.in_(variant_ids))
+            .order_by(ModelPerformance.measured_at.desc())
+        ):
+            performance_by_variant.setdefault(performance.model_variant_id, performance)
 
     first_endpoint_by_variant: dict[str, ModelEndpoint] = {}
     if variant_ids:
@@ -205,6 +228,20 @@ def list_models(
         endpoint = first_endpoint_by_variant.get(variant.id) if variant else None
         item["variant"] = row_dict(variant, VARIANT_COLUMNS) if variant else None
         item["endpoint"] = row_dict(endpoint, ENDPOINT_COLUMNS) if endpoint else None
+        item["capability_source"] = (
+            source_names.get(variant.source_id) if variant and
+            variant.source_id != item.get("source_id") else None
+        )
+        price = pricing_by_variant.get(variant.id) if variant else None
+        performance = performance_by_variant.get(variant.id) if variant else None
+        item["pricing"] = row_dict(
+            price, ["input_price_per_million", "output_price_per_million",
+                    "cached_input_price", "currency", "provider_name", "observed_at"]
+        ) if price else None
+        item["performance"] = row_dict(
+            performance, ["tokens_per_second", "time_to_first_token_ms",
+                          "latency_ms", "provider_name", "measured_at"]
+        ) if performance else None
         item["evaluations"] = (
             evaluations_by_variant.get(variant.id, []) if variant else []
         )

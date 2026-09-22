@@ -243,8 +243,11 @@ def test_recover_stale_pipeline_run(session):
 
 def test_discovery_adds_recent_models_idempotently(session, registry, tmp_path, monkeypatch):
     from datetime import date
-    from backend_core.domain import ModelAlias, ModelRelease
-    from ingestion.catalog_discovery import discover_aa_models
+    from backend_core.domain import (
+        ModelAlias, ModelFamily, ModelPerformance, ModelPricing,
+        ModelRelease, ModelVariant,
+    )
+    from ingestion.catalog_discovery import discover_aa_models, enrich_openrouter_models
 
     monkeypatch.setattr("ingestion.snapshot_store.raw_dir", lambda: tmp_path)
     models = [
@@ -253,6 +256,11 @@ def test_discovery_adds_recent_models_idempotently(session, registry, tmp_path, 
             "release_date": "2026-09-01",
             "model_creator": {"name": "New Vendor"},
             "evaluations": {"artificial_analysis_intelligence_index": 42},
+            "pricing": {
+                "price_1m_input_tokens": 1.2,
+                "price_1m_output_tokens": 4.5,
+            },
+            "performance": {"median_output_tokens_per_second": 120},
         },
         {
             "id": "old-1", "name": "Old Model", "slug": "old-model",
@@ -280,3 +288,28 @@ def test_discovery_adds_recent_models_idempotently(session, registry, tmp_path, 
     alias = session.scalar(select(ModelAlias).where(ModelAlias.alias == "fresh-model"))
     assert alias.model_variant_id == release.default_variant_id
     assert session.scalar(select(ModelRelease).where(ModelRelease.canonical_name == "Old Model")) is None
+    assert len(session.scalars(select(ModelPricing)).all()) == 1
+    assert len(session.scalars(select(ModelPerformance)).all()) == 1
+
+    enriched = enrich_openrouter_models(
+        session, aa_source_id=registry["source_id"], aa_models=models,
+        openrouter_models=[{
+            "id": "new-vendor/fresh-model",
+            "name": "New Vendor: Fresh Model",
+            "context_length": 128000,
+            "architecture": {
+                "input_modalities": ["text", "image"],
+                "output_modalities": ["text"],
+            },
+            "supported_parameters": ["tools", "reasoning"],
+            "description": "Image-aware model for coding tasks.",
+        }],
+    )
+    session.commit()
+    assert enriched == {"matched": 1}
+    variant = session.get(ModelVariant, release.default_variant_id)
+    assert variant.context_window == 128000
+    assert variant.supports_image is True
+    assert variant.supports_tool_calling is True
+    assert variant.supports_reasoning is True
+    assert session.get(ModelFamily, release.family_id).description.startswith("Image-aware")
