@@ -60,8 +60,9 @@ def evaluations(model_key:str,session:Session=Depends(get_db_session),benchmark:
     stmt=select(DwdModelEvaluation).where(DwdModelEvaluation.model_id==model.id)
     if benchmark:stmt=stmt.where(DwdModelEvaluation.benchmark_name==benchmark)
     rows=session.scalars(stmt.order_by(DwdModelEvaluation.data_date.desc()).limit(limit)).all()
-    return jsonable({"items":[{"id":r.id,"benchmark_slug":r.benchmark_name,"score":r.score,"evaluation_date":r.evaluated_at,
-      "source":r.evaluation_platform,"test_conditions":r.test_conditions} for r in rows],"next_cursor":None})
+    return jsonable({"items":[{"id":r.id,"benchmark_slug":r.benchmark_name,"score":r.score,"score_unit":r.score_unit,
+      "benchmark_version":r.benchmark_version,"evaluation_date":r.evaluated_at,"data_date":r.data_date,
+      "source":r.evaluation_platform,"evaluator":r.evaluator,"test_conditions":r.test_conditions} for r in rows],"next_cursor":None})
 
 @router.get("/api/v1/benchmarks")
 def benchmarks(session:Session=Depends(get_db_session),limit:int=Query(100,le=500),cursor:str|None=None):

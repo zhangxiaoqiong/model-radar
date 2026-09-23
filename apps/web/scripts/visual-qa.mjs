@@ -13,10 +13,11 @@ page.on("pageerror", error => consoleErrors.push(error.message));
 
 await page.goto("http://127.0.0.1:4173/", { waitUntil: "networkidle" });
 await page.getByText("来源数据", { exact: true }).waitFor();
-await page.getByRole("heading", { name: "最新模型雷达" }).waitFor();
+await page.getByRole("heading", { name: /看清模型格局/ }).waitFor();
+await page.getByLabel("看板全局筛选").waitFor();
 await page.screenshot({ path: fileURLToPath(new URL("overview.png", outputDir)), fullPage: true });
 
-await page.getByRole("button", { name: "模型", exact: true }).click();
+await page.getByRole("button", { name: "模型库", exact: true }).click();
 await page.getByRole("heading", { name: "模型图谱" }).waitFor();
 if (new URL(page.url()).pathname !== "/models") throw new Error("Models route did not update");
 const rows = page.locator("tbody tr");
@@ -31,7 +32,10 @@ if (await page.getByRole("button", { name: "下一页" }).isEnabled()) {
 const providerFilter = page.locator(".filter").filter({ hasText: "提供商" }).locator("select");
 await providerFilter.selectOption("Anthropic");
 const providerRows = await rows.count();
-if (providerRows < 1 || providerRows >= totalRows) throw new Error("Provider filter did not narrow the table");
+if (providerRows < 1) throw new Error("Provider filter returned no rows");
+for (let index = 0; index < providerRows; index += 1) {
+  if (!await rows.nth(index).getByText("Anthropic", { exact: true }).count()) throw new Error("Provider filter leaked another vendor");
+}
 await providerFilter.selectOption("all");
 const capabilityFilter = page.locator(".filter").filter({ hasText: "能力" }).locator("select");
 await capabilityFilter.selectOption("图片");
@@ -55,12 +59,19 @@ await page.screenshot({ path: fileURLToPath(new URL("catalog.png", outputDir)) }
 await page.getByRole("button", { name: /开始对比/ }).click();
 await page.getByRole("heading", { name: "模型对比" }).waitFor();
 if (await page.locator(".compare-head").count() !== 2) throw new Error("Expected two selected models in comparison");
+await page.locator(".compare-evidence").waitFor();
+if (await page.locator(".compare-evidence-row").count() < 1) throw new Error("Comparison has no evaluation evidence");
+if (await page.locator(".cost-row").count() !== 2) throw new Error("Comparison cost chart is missing selected models");
 await page.screenshot({ path: fileURLToPath(new URL("compare.png", outputDir)), fullPage: true });
 
-await page.getByRole("button", { name: "基准", exact: true }).click();
-await page.getByRole("heading", { name: "基准目录" }).waitFor();
-if (new URL(page.url()).pathname !== "/benchmarks") throw new Error("Benchmarks route did not update");
-await page.getByRole("button", { name: /GPQA Diamond/ }).click();
+await page.getByRole("button", { name: "最新动态", exact: true }).click();
+await page.getByRole("heading", { name: "最新动态" }).waitFor();
+if (new URL(page.url()).pathname !== "/updates") throw new Error("Updates route did not update");
+await page.screenshot({ path: fileURLToPath(new URL("updates.png", outputDir)), fullPage: true });
+
+await page.getByRole("button", { name: "评测平台", exact: true }).click();
+await page.getByRole("heading", { name: "专业评测平台" }).waitFor();
+if (new URL(page.url()).pathname !== "/evaluations") throw new Error("Evaluation platforms route did not update");
 await page.screenshot({ path: fileURLToPath(new URL("benchmarks.png", outputDir)), fullPage: true });
 
 const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
@@ -73,4 +84,4 @@ await mobile.screenshot({ path: fileURLToPath(new URL("mobile.png", outputDir)) 
 
 await browser.close();
 if (consoleErrors.length) throw new Error(`Browser console errors: ${consoleErrors.join(" | ")}`);
-console.log(JSON.stringify({ navigation: "passed", rows: totalRows, filters: "passed", selection: "passed", compare: "passed", benchmarks: "passed", mobile: "passed", consoleErrors: 0 }));
+console.log(JSON.stringify({ navigation: "passed", dashboardFilters: "passed", rows: totalRows, filters: "passed", selection: "passed", compare: "passed", updates: "passed", evaluations: "passed", mobile: "passed", consoleErrors: 0 }));

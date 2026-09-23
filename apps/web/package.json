@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build && node scripts/prepare-sites-build.mjs",
-    "test": "node --test tests/derive.test.mjs tests/sites-worker.test.mjs",
+    "test": "node --test tests/cost.test.mjs tests/derive.test.mjs tests/sites-worker.test.mjs",
     "preview": "vite preview",
     "test:visual": "node scripts/visual-qa.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs"

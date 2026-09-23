@@ -7,8 +7,6 @@ export const PROVIDER_ICONS = { OpenAI: PiSparkle, Anthropic: SiAnthropic, Googl
 
 export function ModelMark({ model }) { const Icon=PROVIDER_ICONS[model.provider]||PiSparkle; return <span className={`provider-mark provider-${model.provider.toLowerCase()}`}><Icon/></span>; }
 
-export function Rating({ value, label }) { return value==null?<span className="unknown-rating" aria-label={`${label} 暂无数据`}>—</span>:<div className="rating" aria-label={`${label} ${value}/5`}><span className="rating-bars">{[1,2,3,4,5].map(n=><i key={n} className={n<=value?"filled":""}/>)}</span><small>{value>=5?"极强":value>=4?"强":value>=3?"中":"基础"}</small></div>; }
-
 export function Filter({ label, value, onChange, options }) { return <label className="filter"><span>{label}</span><select value={value} onChange={e=>onChange(e.target.value)}><option value="all">全部</option>{options.map(x=><option key={x} value={x}>{x}</option>)}</select><PiCaretDown/></label>; }
 
 export function PageHero({ eyebrow, title, description, aside }) {

@@ -48,34 +48,6 @@ export function buildLeaderboard(models, dimension, limit=8) {
   return { rows: top, max: top.length ? top[0].score : null };
 }
 
-export function buildQuadrant(models) {
-  const groups=groupByName(models);
-  const points=[];
-  let excluded=0;
-  for (const group of groups) {
-    let best=null;
-    for (const model of group) {
-      const value=finite(model.score?.["AA Intelligence"]);
-      if (value==null) continue;
-      if (!best || value>best.value) best={ value, model };
-    }
-    if (!best) { excluded++; continue; }
-    const price=finite(best.model.inputPrice);
-    if (price==null || price<=0) { excluded++; continue; }
-    points.push({
-      id: best.model.id, name: best.model.name, provider: best.model.provider,
-      x: price, y: best.value, z: finite(best.model.contextTokens)||0, release: best.model.release,
-    });
-  }
-  return {
-    points,
-    medianX: median(points.map(p=>p.x)),
-    medianY: median(points.map(p=>p.y)),
-    excluded,
-    total: groups.length,
-  };
-}
-
 export function buildTradeoff(models, dimension, measure = "inputPrice") {
   const lowerIsBetter = measure === "inputPrice";
   const points = [];
@@ -109,16 +81,4 @@ export function buildPricePairs(models, dimension, limit = 6) {
     .filter(Boolean)
     .sort((a, b) => b.score[dimension] - a.score[dimension])
     .slice(0, limit);
-}
-
-export function buildPulse(models, dimensions=DIMENSIONS) {
-  return dimensions.map(label=>{
-    let best=null;
-    for (const model of models) {
-      const value=finite(model.score?.[label]);
-      if (value==null) continue;
-      if (!best || value>best.value) best={ value, model };
-    }
-    return best ? { label, model: best.model, value: best.value } : null;
-  }).filter(Boolean);
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildLeaderboard, buildPricePairs, buildPulse, buildQuadrant, buildTradeoff, computeKpis } from "../src/lib/derive.js";
+import { buildLeaderboard, buildPricePairs, buildTradeoff, computeKpis } from "../src/lib/derive.js";
 
 const model = (over={}) => ({
   id: over.id ?? "slug-a", name: over.name ?? "Model A", provider: over.provider ?? "OpenAI",
@@ -43,40 +43,6 @@ test("buildLeaderboard aggregates variants by name and orders with tiebreak", ()
   assert.equal(max, 52);
   assert.deepEqual(rows.map(r => r.id), ["b", "a-high"]); // tie on score -> newer release first; C has no score
   assert.equal(rows[1].inputPrice, 3); // row carries the winning variant's handle
-});
-
-test("buildQuadrant excludes free and scoreless models and splits medians", () => {
-  const models = [
-    model({ id: "a", name: "A", inputPrice: 1, score: { "AA Intelligence": 50 } }),
-    model({ id: "a2", name: "A", inputPrice: 9, score: { "AA Intelligence": 55 } }), // same model: best score wins
-    model({ id: "b", name: "B", inputPrice: 0, score: { "AA Intelligence": 60 } }),   // free -> excluded
-    model({ id: "c", name: "C", inputPrice: 4, score: {} }),                          // no score -> excluded
-    model({ id: "d", name: "D", inputPrice: 8, score: { "AA Intelligence": 30 } }),
-  ];
-  const q = buildQuadrant(models);
-  assert.deepEqual(q.points.map(p => p.id).sort(), ["a2", "d"]);
-  assert.equal(q.points.find(p => p.id === "a2").x, 9); // winning variant's price
-  assert.equal(q.excluded, 2);
-  assert.equal(q.total, 4);
-  assert.equal(q.medianX, 8.5);
-  assert.equal(q.medianY, 42.5);
-});
-
-test("buildQuadrant with too few points still reports exclusions", () => {
-  const q = buildQuadrant([model({ score: { "AA Intelligence": 10 } })]);
-  assert.equal(q.points.length, 1);
-  assert.equal(q.medianX, 2);
-});
-
-test("buildPulse returns per-dimension leader", () => {
-  const models = [
-    model({ id: "a", name: "A", score: { "AA Intelligence": 40, "AA Coding": 70 } }),
-    model({ id: "b", name: "B", score: { "AA Intelligence": 41 } }),
-  ];
-  const pulse = buildPulse(models);
-  assert.deepEqual(pulse.map(p => [p.label, p.model.id]), [
-    ["AA Intelligence", "b"], ["AA Coding", "a"],
-  ]);
 });
 
 test("buildTradeoff keeps only nondominated price and speed points on each frontier", () => {

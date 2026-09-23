@@ -36,6 +36,8 @@ export function mapApiModel(item) {
     contextTokens:variant.context_window||null, capabilities, capabilitySource,
     inputPrice:price.input_price_per_million==null?null:Number(price.input_price_per_million),
     outputPrice:price.output_price_per_million==null?null:Number(price.output_price_per_million),
+    cacheReadPrice:price.cached_input_price==null?null:Number(price.cached_input_price),
+    currency:price.currency||null, pricingProvider:price.provider_name||null,
     speed:performance.tokens_per_second==null?null:Number(performance.tokens_per_second),
     description:item.description||null,
     eval:headline?Number(headline.score):null, benchmark:headline?(SCORE_LABELS[headline.benchmark_slug]||headline.benchmark_name):"待评测",
@@ -45,12 +47,20 @@ export function mapApiModel(item) {
   };
 }
 
+export async function loadModelEvaluations(slug) {
+  const response=await fetch(`/api/v1/models/${encodeURIComponent(slug)}/evaluations?limit=500`);
+  if(!response.ok) throw new Error("Evaluation API unavailable");
+  const body=await response.json();
+  return body.items||[];
+}
+
 export function mapApiBenchmark(item) {
   const categoryMap={coding:"代码",reasoning:"推理",agent:"智能体",composite:"综合",multimodal:"多模态",knowledge:"知识"};
   const version=item.versions?.[0], metric=version?.metrics?.[0];
-  return { id:item.slug, name:item.name, category:categoryMap[item.category]||item.category, capability:item.capabilities?.map(x=>x.name).join(" / ")||item.category,
-    version:version?.version||"—", metric:metric?.name||"—", risk:item.contamination_risk==="low"?"低":item.contamination_risk==="high"?"高":"中",
-    results:"—", updated:"本次同步", description:item.description||"暂无说明", method:`${metric?.name||"Score"} · ${metric?.score_direction||"higher_better"}` };
+  const inferredCategory=item.slug?.includes("coding")?"代码":item.slug?.includes("agentic")?"智能体":"综合";
+  return { id:item.slug, name:SCORE_LABELS[item.slug]||item.name, category:categoryMap[item.category]||inferredCategory, capability:item.capabilities?.map(x=>x.name).join(" / ")||inferredCategory,
+    version:version?.version&&version.version!=="source"?version.version:"未记录", metric:metric?.name||"—", risk:item.contamination_risk==="low"?"低":item.contamination_risk==="high"?"高":item.contamination_risk==="medium"?"中":"未提供",
+    results:item.result_count??"—", updated:"未提供", description:item.description||"暂无说明", method:`${metric?.name||"Score"} · ${metric?.score_direction||"higher_better"}` };
 }
 
 export async function loadModels() {
@@ -76,7 +86,7 @@ export async function loadBenchmarks() {
   const benchmarkBody=await benchmarkResponse.json();
   const benchmarkDetails=await Promise.all(benchmarkBody.items.map(async item=>{
     const response=await fetch(`/api/v1/benchmarks/${item.slug}`);
-    return response.ok?response.json():item;
+    return response.ok?{...item,...await response.json()}:item;
   }));
   return benchmarkDetails.map(mapApiBenchmark);
 }

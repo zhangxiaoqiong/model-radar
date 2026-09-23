@@ -10,9 +10,9 @@ function Tile({ label, value, hint, loading }) {
   </div>;
 }
 
-export function KpiBand({ kpis, loading }) {
+export function KpiBand({ kpis, loading, rangeLabel }) {
   return <div className="kpi-band" role="group" aria-label="全局统计">
-    <Tile label="跟踪模型" value={kpis.modelCount} hint="个 · 近 90 天" loading={loading}/>
+    <Tile label="跟踪模型" value={kpis.modelCount} hint={rangeLabel || "当前范围"} loading={loading}/>
     <Tile label="提供商" value={kpis.providerCount} hint="家" loading={loading}/>
     <Tile label="有评估数据" value={kpis.evaluatedCount} hint="个模型可比较" loading={loading}/>
     <Tile label="输入价中位数" value={priceLabel(kpis.medianInputPrice)} hint="/ 百万 tokens" loading={loading}/>
