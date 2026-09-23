@@ -1,513 +1,82 @@
-"""Public read endpoints: health, status, models, benchmarks, evaluations, compare.
-
-Query policy: the DB is remote, so every response is built from a bounded
-number of batched queries (no per-row lookups). N+1 patterns are banned here.
-"""
-
-from __future__ import annotations
-
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+"""Read-only analytical APIs backed by ADS and DWD."""
+from fastapi import APIRouter,Depends,HTTPException,Query
+from sqlalchemy import func,select
 from sqlalchemy.orm import Session
+from backend_core.domain import AdsModelWide,DwdModel,DwdModelEvaluation,EtlBatch
+from ..deps import get_db_session,jsonable
+router=APIRouter()
 
-from backend_core.domain import (
-    Benchmark,
-    BenchmarkCapabilityMap,
-    BenchmarkMetric,
-    BenchmarkVersion,
-    Capability,
-    EntityResolutionQueue,
-    Evaluation,
-    ModelEndpoint,
-    ModelFamily,
-    ModelPerformance,
-    ModelPricing,
-    ModelRelease,
-    ModelVariant,
-    PipelineRun,
-    Provider,
-    Source,
-    SourceSnapshot,
-)
-
-from ..deps import get_db_session, row_dict
-from ..pagination import apply_cursor, page_result
-
-router = APIRouter()
-
-RELEASE_COLUMNS = [
-    "id", "slug", "canonical_name", "release_date", "knowledge_cutoff",
-    "open_weight", "license", "status", "default_variant_id", "source_id",
-]
-VARIANT_COLUMNS = [
-    "id", "name", "variant_type", "reasoning_level", "context_window",
-    "max_output_tokens", "supports_text", "supports_image", "supports_audio",
-    "supports_video", "supports_reasoning", "supports_tool_calling",
-    "supports_structured_output", "source_id",
-]
-ENDPOINT_COLUMNS = [
-    "id", "external_model_id", "endpoint_type", "api_base_url",
-    "context_window", "max_output_tokens", "status",
-]
-EVAL_COLUMNS = [
-    "id", "model_variant_id", "model_endpoint_id", "benchmark_id",
-    "benchmark_version_id", "benchmark_metric_id", "source_id",
-    "source_snapshot_id",
-    "score", "evaluation_date", "evaluation_type", "sample_size",
-    "confidence", "confidence_lower", "confidence_upper",
-    "evaluation_identity_hash", "supersedes_evaluation_id",
-    "last_confirmed_at", "last_confirmed_snapshot_id", "confirmation_count",
-    "created_at",
-]
-
-
-def _superseded_ids():
-    return select(Evaluation.supersedes_evaluation_id).where(
-        Evaluation.supersedes_evaluation_id.is_not(None)
-    )
-
+def _latest(session): return session.scalar(select(func.max(AdsModelWide.snapshot_date)))
+def _item(row):
+    modes=set((row.input_modalities or [])+(row.output_modalities or [])); tags=set(row.tags or [])
+    return {"id":row.model_id,"slug":row.model_key,"canonical_name":row.model_name,
+      "release_date":row.release_date,"provider":row.vendor_name.lower().replace(" ","-"),"provider_name":row.vendor_name,
+      "description":None,"default_variant_id":row.model_id,
+      "variant":{"id":row.model_id,"name":"standard","context_window":row.context_window,"max_output_tokens":row.max_output_tokens,
+        **{f"supports_{m}":m in modes for m in ("text","image","audio","video")},
+        "supports_reasoning":"reasoning" in tags,"supports_tool_calling":"tool_calling" in tags,"supports_structured_output":"structured_output" in tags},
+      "endpoint":None,"capability_source":"OpenRouter" if row.input_modalities else None,
+      "pricing":{"input_price_per_million":row.input_price,"output_price_per_million":row.output_price,
+        "cached_input_price":row.cache_read_price,"currency":"USD","provider_name":row.selected_service_provider,"observed_at":row.refreshed_at}
+        if row.input_price is not None or row.output_price is not None else None,
+      "performance":{"tokens_per_second":row.output_tokens_per_second,"time_to_first_token_ms":row.time_to_first_token_ms,
+        "provider_name":"Artificial Analysis","measured_at":row.refreshed_at} if row.output_tokens_per_second is not None else None,
+      "evaluations":[{"benchmark_slug":k,"benchmark_name":k,"score":v,"source":"Artificial Analysis","observed_at":row.refreshed_at}
+        for k,v in (row.headline_scores or {}).items()]}
 
 @router.get("/health")
-def health(session: Session = Depends(get_db_session)):
-    db_ok = session.scalar(select(1)) == 1
-    return {"status": "ok" if db_ok else "degraded", "db": "ok" if db_ok else "error"}
-
+def health(session:Session=Depends(get_db_session)): return {"status":"ok","db":"ok" if session.scalar(select(1))==1 else "error"}
 
 @router.get("/api/v1/status")
-def status(session: Session = Depends(get_db_session)):
-    """Freshness snapshot for the UI header: latest source snapshot, latest
-    pipeline run, current evaluation count, pending resolution work."""
-    latest_snapshot_time = session.scalar(
-        select(func.max(SourceSnapshot.snapshot_time))
-    )
-    latest_run = session.scalar(
-        select(PipelineRun).order_by(PipelineRun.created_at.desc()).limit(1)
-    )
-    return {
-        "latest_snapshot_time": latest_snapshot_time,
-        "latest_pipeline": (
-            {
-                "id": latest_run.id,
-                "type": latest_run.pipeline_type,
-                "status": latest_run.status,
-                "finished_at": latest_run.finished_at,
-            }
-            if latest_run
-            else None
-        ),
-        "evaluation_count": session.scalar(
-            select(func.count()).select_from(Evaluation)
-        ),
-        "current_evaluation_count": session.scalar(
-            select(func.count())
-            .select_from(Evaluation)
-            .where(Evaluation.id.not_in(_superseded_ids()))
-        ),
-        "pending_resolution_count": session.scalar(
-            select(func.count())
-            .select_from(EntityResolutionQueue)
-            .where(EntityResolutionQueue.status == "pending")
-        ),
-    }
-
+def status(session:Session=Depends(get_db_session)):
+    batch=session.scalar(select(EtlBatch).order_by(EtlBatch.started_at.desc()).limit(1))
+    count=session.scalar(select(func.count()).select_from(DwdModelEvaluation))
+    return {"latest_snapshot_time":batch.finished_at if batch else None,
+      "latest_pipeline":{"id":batch.id,"type":batch.source_code,"status":batch.status,"finished_at":batch.finished_at} if batch else None,
+      "evaluation_count":count,"current_evaluation_count":count,"pending_resolution_count":0}
 
 @router.get("/api/v1/models")
-def list_models(
-    session: Session = Depends(get_db_session),
-    provider: str | None = Query(default=None, description="provider slug"),
-    q: str | None = Query(default=None, description="name/slug search"),
-    status: str = Query(default="active"),
-    cursor: str | None = Query(default=None),
-    limit: int = Query(default=20, ge=1, le=100),
-    include_summary: bool = Query(default=False),
-):
-    # 1 query: releases + provider/family slugs, cursor-paginated
-    stmt = (
-        select(
-            ModelRelease,
-            Provider.slug.label("provider_slug"),
-            Provider.name.label("provider_name"),
-            ModelFamily.slug.label("family_slug"),
-            ModelFamily.description.label("description"),
-        )
-        .join(ModelFamily, ModelRelease.family_id == ModelFamily.id)
-        .join(Provider, ModelFamily.provider_id == Provider.id)
-        .where(ModelRelease.status == status)
-    )
-    if provider:
-        stmt = stmt.where(Provider.slug == provider)
-    if q:
-        like = f"%{q}%"
-        stmt = stmt.where(
-            ModelRelease.canonical_name.like(like) | ModelRelease.slug.like(like)
-        )
-    stmt = stmt.order_by(ModelRelease.id.desc()).limit(limit + 1)
-    if cursor:
-        stmt = stmt.where(ModelRelease.id < cursor)
+def models(session:Session=Depends(get_db_session),provider:str|None=None,q:str|None=None,cursor:str|None=None,
+           limit:int=Query(20,ge=1,le=100),include_summary:bool=False,status:str|None=None):
+    day=_latest(session)
+    if day is None:return {"items":[],"next_cursor":None}
+    stmt=select(AdsModelWide).where(AdsModelWide.snapshot_date==day)
+    if provider:stmt=stmt.where(AdsModelWide.vendor_name==provider)
+    if q:stmt=stmt.where(AdsModelWide.model_name.like(f"%{q}%"))
+    if cursor:stmt=stmt.where(AdsModelWide.id>cursor)
+    rows=session.scalars(stmt.order_by(AdsModelWide.id).limit(limit+1)).all(); more=len(rows)>limit; rows=rows[:limit]
+    return jsonable({"items":[_item(r) for r in rows],"next_cursor":rows[-1].id if more else None})
 
-    rows = session.execute(stmt).all()
-    next_cursor = None
-    if len(rows) > limit:
-        rows = rows[:limit]
-        next_cursor = rows[-1][0].id
-    items = [
-        {**row_dict(release, RELEASE_COLUMNS),
-         "provider": provider_slug, "provider_name": provider_name,
-         "family": family_slug, "description": description}
-        for release, provider_slug, provider_name, family_slug, description in rows
-    ]
-    result = {"items": items, "next_cursor": next_cursor}
-    if not include_summary or not rows:
-        return result
+@router.get("/api/v1/models/{model_key}")
+def model_detail(model_key:str,session:Session=Depends(get_db_session)):
+    row=session.scalar(select(AdsModelWide).where(AdsModelWide.snapshot_date==_latest(session),AdsModelWide.model_key==model_key))
+    if not row:raise HTTPException(404,f"model '{model_key}' not found")
+    return jsonable(_item(row))
 
-    # Summary uses bounded batch queries, independent of page size.
-    variant_ids = [release.default_variant_id for release, _, _, _, _ in rows
-                   if release.default_variant_id]
-    variants_by_id = {
-        v.id: v
-        for v in session.scalars(
-            select(ModelVariant).where(ModelVariant.id.in_(variant_ids))
-        )
-    } if variant_ids else {}
-    source_ids = {v.source_id for v in variants_by_id.values() if v.source_id}
-    source_names = {
-        source.id: source.name
-        for source in session.scalars(select(Source).where(Source.id.in_(source_ids)))
-    } if source_ids else {}
-    pricing_by_variant = {}
-    performance_by_variant = {}
-    if variant_ids:
-        for price in session.scalars(
-            select(ModelPricing).where(ModelPricing.model_variant_id.in_(variant_ids))
-            .order_by(ModelPricing.observed_at.desc())
-        ):
-            pricing_by_variant.setdefault(price.model_variant_id, price)
-        for performance in session.scalars(
-            select(ModelPerformance).where(ModelPerformance.model_variant_id.in_(variant_ids))
-            .order_by(ModelPerformance.measured_at.desc())
-        ):
-            performance_by_variant.setdefault(performance.model_variant_id, performance)
-
-    first_endpoint_by_variant: dict[str, ModelEndpoint] = {}
-    if variant_ids:
-        for endpoint in session.scalars(
-            select(ModelEndpoint)
-            .where(ModelEndpoint.model_variant_id.in_(variant_ids))
-            .order_by(
-                ModelEndpoint.model_variant_id,
-                ModelEndpoint.endpoint_type,
-                ModelEndpoint.external_model_id,
-            )
-        ):
-            first_endpoint_by_variant.setdefault(endpoint.model_variant_id, endpoint)
-
-    evaluations_by_variant: dict[str, list[dict]] = {}
-    if variant_ids:
-        eval_rows = session.execute(
-            select(Evaluation, Benchmark.slug, Benchmark.name, Source.name)
-            .join(Benchmark, Evaluation.benchmark_id == Benchmark.id)
-            .join(Source, Evaluation.source_id == Source.id)
-            .where(
-                Evaluation.model_variant_id.in_(variant_ids),
-                Evaluation.id.not_in(_superseded_ids()),
-            )
-            .order_by(Evaluation.created_at.desc())
-        ).all()
-        for evaluation, benchmark_slug, benchmark_name, source_name in eval_rows:
-            evaluations_by_variant.setdefault(evaluation.model_variant_id, []).append({
-                "benchmark_slug": benchmark_slug,
-                "benchmark_name": benchmark_name,
-                "score": str(evaluation.score),
-                "source": source_name,
-                "source_snapshot_id": evaluation.source_snapshot_id,
-                "observed_at": row_dict(evaluation, ["created_at"])["created_at"],
-            })
-
-    for item in result["items"]:
-        variant = variants_by_id.get(item.get("default_variant_id"))
-        endpoint = first_endpoint_by_variant.get(variant.id) if variant else None
-        item["variant"] = row_dict(variant, VARIANT_COLUMNS) if variant else None
-        item["endpoint"] = row_dict(endpoint, ENDPOINT_COLUMNS) if endpoint else None
-        item["capability_source"] = (
-            source_names.get(variant.source_id) if variant and
-            variant.source_id != item.get("source_id") else None
-        )
-        price = pricing_by_variant.get(variant.id) if variant else None
-        performance = performance_by_variant.get(variant.id) if variant else None
-        item["pricing"] = row_dict(
-            price, ["input_price_per_million", "output_price_per_million",
-                    "cached_input_price", "currency", "provider_name", "observed_at"]
-        ) if price else None
-        item["performance"] = row_dict(
-            performance, ["tokens_per_second", "time_to_first_token_ms",
-                          "latency_ms", "provider_name", "measured_at"]
-        ) if performance else None
-        item["evaluations"] = (
-            evaluations_by_variant.get(variant.id, []) if variant else []
-        )
-    return result
-
-
-@router.get("/api/v1/models/{slug}")
-def model_detail(slug: str, session: Session = Depends(get_db_session)):
-    release = session.scalar(select(ModelRelease).where(ModelRelease.slug == slug))
-    if release is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail=f"model '{slug}' not found")
-
-    family = session.get(ModelFamily, release.family_id)
-    prov = session.get(Provider, family.provider_id)
-
-    variants = session.scalars(
-        select(ModelVariant)
-        .where(ModelVariant.model_release_id == release.id)
-        .order_by(ModelVariant.name)
-    ).all()
-
-    # one joined query for endpoints + their provider slugs
-    variant_ids = [v.id for v in variants]
-    ep_rows = (
-        session.execute(
-            select(ModelEndpoint, Provider.slug)
-            .join(Provider, ModelEndpoint.provider_id == Provider.id)
-            .where(ModelEndpoint.model_variant_id.in_(variant_ids))
-            .order_by(ModelEndpoint.external_model_id)
-        ).all()
-        if variant_ids
-        else []
-    )
-    ep_dicts = [
-        {**row_dict(endpoint, ENDPOINT_COLUMNS), "provider": provider_slug}
-        for endpoint, provider_slug in ep_rows
-    ]
-
-    return {
-        **row_dict(release, RELEASE_COLUMNS),
-        "provider": prov.slug,
-        "family": family.slug,
-        "variants": [row_dict(v, VARIANT_COLUMNS) for v in variants],
-        "endpoints": ep_dicts,
-    }
-
-
-@router.get("/api/v1/models/{slug}/evaluations")
-def model_evaluations(
-    slug: str,
-    session: Session = Depends(get_db_session),
-    benchmark: str | None = Query(default=None, description="benchmark slug"),
-    include_history: bool = Query(default=False),
-    cursor: str | None = Query(default=None),
-    limit: int = Query(default=50, ge=1, le=200),
-):
-    release = session.scalar(select(ModelRelease).where(ModelRelease.slug == slug))
-    if release is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail=f"model '{slug}' not found")
-
-    variant_ids = session.scalars(
-        select(ModelVariant.id).where(ModelVariant.model_release_id == release.id)
-    ).all()
-
-    # one joined query: evaluations + benchmark slug + version label
-    stmt = (
-        select(Evaluation, Benchmark.slug, BenchmarkVersion.version)
-        .join(Benchmark, Evaluation.benchmark_id == Benchmark.id)
-        .outerjoin(
-            BenchmarkVersion, Evaluation.benchmark_version_id == BenchmarkVersion.id
-        )
-        .where(Evaluation.model_variant_id.in_(variant_ids))
-    )
-    if not include_history:
-        stmt = stmt.where(Evaluation.id.not_in(_superseded_ids()))
-    if benchmark:
-        stmt = stmt.where(Benchmark.slug == benchmark)
-
-    stmt = stmt.order_by(Evaluation.id.desc()).limit(limit + 1)
-    if cursor:
-        stmt = stmt.where(Evaluation.id < cursor)
-    eval_rows = session.execute(stmt).all()
-
-    superseded_set = set(session.scalars(_superseded_ids()).all())
-
-    next_cursor = None
-    if len(eval_rows) > limit:
-        eval_rows = eval_rows[:limit]
-        next_cursor = eval_rows[-1][0].id
-
-    items = []
-    for evaluation, benchmark_slug, version_label in eval_rows:
-        d = row_dict(evaluation, EVAL_COLUMNS)
-        d["benchmark_slug"] = benchmark_slug
-        d["benchmark_version"] = version_label
-        d["is_current"] = evaluation.id not in superseded_set
-        items.append(d)
-    return {"items": items, "next_cursor": next_cursor}
-
+@router.get("/api/v1/models/{model_key}/evaluations")
+def evaluations(model_key:str,session:Session=Depends(get_db_session),benchmark:str|None=None,limit:int=Query(100,le=500),include_history:bool=False,cursor:str|None=None):
+    model=session.scalar(select(DwdModel).where(DwdModel.model_key==model_key))
+    if not model:raise HTTPException(404,f"model '{model_key}' not found")
+    stmt=select(DwdModelEvaluation).where(DwdModelEvaluation.model_id==model.id)
+    if benchmark:stmt=stmt.where(DwdModelEvaluation.benchmark_name==benchmark)
+    rows=session.scalars(stmt.order_by(DwdModelEvaluation.data_date.desc()).limit(limit)).all()
+    return jsonable({"items":[{"id":r.id,"benchmark_slug":r.benchmark_name,"score":r.score,"evaluation_date":r.evaluated_at,
+      "source":r.evaluation_platform,"test_conditions":r.test_conditions} for r in rows],"next_cursor":None})
 
 @router.get("/api/v1/benchmarks")
-def list_benchmarks(
-    session: Session = Depends(get_db_session),
-    cursor: str | None = Query(default=None),
-    limit: int = Query(default=20, ge=1, le=100),
-):
-    stmt = apply_cursor(
-        select(Benchmark).where(Benchmark.status == "active"), Benchmark.id, cursor, limit
-    )
-    rows = session.scalars(stmt).all()
-    result = page_result(list(rows), limit)
+def benchmarks(session:Session=Depends(get_db_session),limit:int=Query(100,le=500),cursor:str|None=None):
+    rows=session.execute(select(DwdModelEvaluation.benchmark_name,func.count()).group_by(DwdModelEvaluation.benchmark_name).limit(limit)).all()
+    return {"items":[{"id":n,"slug":n,"name":n,"category":None,"version_count":1,"result_count":c} for n,c in rows],"next_cursor":None}
 
-    # one aggregate query for the page's version counts
-    page_ids = [b.id for b in result["items"]]
-    counts = dict(
-        session.execute(
-            select(BenchmarkVersion.benchmark_id, func.count())
-            .where(BenchmarkVersion.benchmark_id.in_(page_ids))
-            .group_by(BenchmarkVersion.benchmark_id)
-        ).all()
-    ) if page_ids else {}
-    items = [
-        {**row_dict(b, ["id", "slug", "name", "category", "dynamic",
-                        "dataset_public", "contamination_risk"]),
-         "version_count": counts.get(b.id, 0)}
-        for b in result["items"]
-    ]
-    return {"items": items, "next_cursor": result["next_cursor"]}
-
-
-@router.get("/api/v1/benchmarks/{slug}")
-def benchmark_detail(slug: str, session: Session = Depends(get_db_session)):
-    bench = session.scalar(select(Benchmark).where(Benchmark.slug == slug))
-    if bench is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail=f"benchmark '{slug}' not found")
-
-    versions = session.scalars(
-        select(BenchmarkVersion).where(BenchmarkVersion.benchmark_id == bench.id)
-    ).all()
-    version_ids = [v.id for v in versions]
-    metrics_by_version: dict[str, list[BenchmarkMetric]] = {}
-    if version_ids:
-        for metric in session.scalars(
-            select(BenchmarkMetric)
-            .where(BenchmarkMetric.benchmark_version_id.in_(version_ids))
-        ):
-            metrics_by_version.setdefault(metric.benchmark_version_id, []).append(metric)
-    version_dicts = [
-        {
-            "id": v.id,
-            "version": v.version,
-            "metrics": [
-                row_dict(m, ["id", "slug", "name", "dataset_split", "unit",
-                             "score_direction", "normalization_method"])
-                for m in metrics_by_version.get(v.id, [])
-            ],
-        }
-        for v in versions
-    ]
-
-    cap_rows = session.execute(
-        select(Capability, BenchmarkCapabilityMap.weight)
-        .join(BenchmarkCapabilityMap, BenchmarkCapabilityMap.capability_id == Capability.id)
-        .where(BenchmarkCapabilityMap.benchmark_id == bench.id)
-    ).all()
-
-    return {
-        **row_dict(bench, ["id", "slug", "name", "category", "description",
-                           "official_url", "dynamic", "dataset_public",
-                           "contamination_risk"]),
-        "versions": version_dicts,
-        "capabilities": [
-            {"slug": cap.slug, "name": cap.name, "weight": str(w)}
-            for cap, w in cap_rows
-        ],
-    }
-
+@router.get("/api/v1/benchmarks/{name}")
+def benchmark(name:str,session:Session=Depends(get_db_session)):
+    count=session.scalar(select(func.count()).select_from(DwdModelEvaluation).where(DwdModelEvaluation.benchmark_name==name))
+    if not count:raise HTTPException(404,f"benchmark '{name}' not found")
+    return {"id":name,"slug":name,"name":name,"category":None,"versions":[{"version":"source","metrics":[{"slug":name,"name":"Score","unit":"source_native","score_direction":"higher_better"}]}],"capabilities":[]}
 
 @router.get("/api/v1/compare/models")
-def compare_models(
-    items: str = Query(description="comma-separated variant_id[@endpoint_id] items"),
-    session: Session = Depends(get_db_session),
-):
-    from fastapi import HTTPException
-
-    tokens = [token.strip() for token in items.split(",") if token.strip()]
-    if not 2 <= len(tokens) <= 5:
-        raise HTTPException(status_code=422, detail="compare requires 2 to 5 items")
-
-    # Parse first, then validate with batched lookups. Comparison is limited to
-    # five items, but it still should not add roundtrips per selected model.
-    requested: list[tuple[str, str, str | None]] = []
-    for token in tokens:
-        variant_id, separator, endpoint_id = token.partition("@")
-        endpoint_id = endpoint_id if separator else None  # bare token -> no endpoint filter
-        requested.append((token, variant_id, endpoint_id))
-
-    variant_ids = [variant_id for _, variant_id, _ in requested]
-    endpoint_ids = [endpoint_id for _, _, endpoint_id in requested if endpoint_id]
-
-    release_rows = session.execute(
-        select(ModelVariant, ModelRelease, ModelFamily, Provider)
-        .join(ModelRelease, ModelVariant.model_release_id == ModelRelease.id)
-        .join(ModelFamily, ModelRelease.family_id == ModelFamily.id)
-        .join(Provider, ModelFamily.provider_id == Provider.id)
-        .where(ModelVariant.id.in_(variant_ids))
-    ).all()
-    context_by_variant = {v.id: (v, r, f, p) for v, r, f, p in release_rows}
-    endpoints = (
-        session.scalars(select(ModelEndpoint).where(ModelEndpoint.id.in_(endpoint_ids))).all()
-        if endpoint_ids else []
-    )
-    endpoint_by_id = {endpoint.id: endpoint for endpoint in endpoints}
-
-    for _, variant_id, endpoint_id in requested:
-        if variant_id not in context_by_variant:
-            raise HTTPException(status_code=404, detail=f"variant '{variant_id}' not found")
-        endpoint = endpoint_by_id.get(endpoint_id) if endpoint_id else None
-        if endpoint_id and endpoint is None:
-            raise HTTPException(status_code=404, detail=f"endpoint '{endpoint_id}' not found")
-        if endpoint is not None and endpoint.model_variant_id != variant_id:
-            raise HTTPException(status_code=422, detail="endpoint does not belong to variant")
-
-    evaluations_by_variant: dict[str, list[dict]] = {}
-    eval_rows = session.execute(
-        select(Evaluation, Benchmark.slug, BenchmarkVersion.version)
-        .join(Benchmark, Evaluation.benchmark_id == Benchmark.id)
-        .outerjoin(BenchmarkVersion, Evaluation.benchmark_version_id == BenchmarkVersion.id)
-        .where(
-            Evaluation.model_variant_id.in_(variant_ids),
-            Evaluation.id.not_in(_superseded_ids()),
-        )
-        .order_by(Evaluation.created_at.desc())
-    ).all()
-    for evaluation, benchmark_slug, version_label in eval_rows:
-        d = row_dict(evaluation, ["id", "model_endpoint_id", "benchmark_id", "benchmark_version_id",
-                                  "benchmark_metric_id", "score", "source_id",
-                                  "source_snapshot_id", "confidence", "evaluation_date"])
-        d["benchmark_slug"] = benchmark_slug
-        d["benchmark_version"] = version_label
-        evaluations_by_variant.setdefault(evaluation.model_variant_id, []).append(d)
-
-    result = []
-    for token, variant_id, endpoint_id in requested:
-        variant, release, family, provider = context_by_variant[variant_id]
-        variant_evaluations = list(evaluations_by_variant.get(variant_id, []))
-        if endpoint_id is not None:
-            variant_evaluations = [
-                e for e in variant_evaluations if e["model_endpoint_id"] == endpoint_id
-            ]
-        result.append({
-            "item": token,
-            "provider": provider.slug,
-            "family": family.slug,
-            "release": row_dict(release, RELEASE_COLUMNS),
-            "variant": row_dict(variant, VARIANT_COLUMNS),
-            "endpoint": (
-                row_dict(endpoint_by_id[endpoint_id], ENDPOINT_COLUMNS)
-                if endpoint_id else None
-            ),
-            "evaluations": variant_evaluations,
-        })
-    return {"items": result}
+def compare(items:str,session:Session=Depends(get_db_session)):
+    ids=[x.split("@",1)[0] for x in items.split(",") if x]
+    if not 2<=len(ids)<=5:raise HTTPException(422,"compare requires 2 to 5 items")
+    rows=session.scalars(select(AdsModelWide).where(AdsModelWide.snapshot_date==_latest(session),AdsModelWide.model_id.in_(ids))).all()
+    return jsonable({"items":[_item(r) for r in rows]})

@@ -1,7 +1,7 @@
 [project]
 name = "llm-observatory"
 version = "0.1.0"
-description = "LLM tracking, evaluation and comparison system"
+description = "ODS/DWD/ADS warehouse for model analytics"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
@@ -12,8 +12,6 @@ dependencies = [
     "alembic>=1.13",
     "pymysql>=1.1",
     "httpx>=0.27",
-    "apscheduler>=3.10",
-    "pyyaml>=6.0",
     "uuid6>=2024.1.12",
 ]
 

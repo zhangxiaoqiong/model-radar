@@ -1,16 +1,5 @@
-"""Ingestion package: external source adapters, normalizers, sync pipeline."""
+"""Source adapters and warehouse loading pipeline."""
 
-from .entity_resolution import MatchResult, match_external_model, normalize_name, similarity
-from .normalizers import normalize_aa_evaluation
-from .pipeline import run_sync_pipeline
-from .snapshot_store import store_snapshot
+from .warehouse_pipeline import build_dwd, load_aa, load_openrouter, refresh_ads
 
-__all__ = [
-    "MatchResult",
-    "match_external_model",
-    "normalize_name",
-    "similarity",
-    "normalize_aa_evaluation",
-    "run_sync_pipeline",
-    "store_snapshot",
-]
+__all__ = ["load_aa", "load_openrouter", "build_dwd", "refresh_ads"]

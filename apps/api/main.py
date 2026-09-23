@@ -38,9 +38,9 @@ _STATUS_TITLES = {
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="LLM Observatory API",
-        version="0.1.0",
-        description="V1a: model registry, raw evaluations, admin operations",
+        title="Model Radar Warehouse API",
+        version="0.2.0",
+        description="ODS/DWD/ADS model analytics APIs",
     )
     app.include_router(public.router)
     app.include_router(admin.router)
